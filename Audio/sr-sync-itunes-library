@@ -1,0 +1,132 @@
+#!/bin/bash
+
+#
+# Parameters
+#
+
+LIBRARY_DIR="/Users/sergeyreznikov/Lossy Music"
+LOG_DIR="/Users/sergeyreznikov/Logs"
+
+#
+#
+#
+
+function equal_path {
+	shopt -s nocasematch
+	if [[ "$1" == "$2" ]]; then
+		shopt -u nocasematch
+		return 0
+	else
+		shopt -u nocasematch
+		return 1;
+	fi
+}
+
+function log {
+	if [ -f "$1" ]; then
+		echo "$2" >> "$1"
+	fi
+}
+
+function realpath {
+	python -c "import os, sys; print os.path.realpath(sys.argv[1]);" "$1"
+}
+
+LIBRARY_DIR=$(realpath "$LIBRARY_DIR")
+if [ ! -d "$LIBRARY_DIR" ]; then
+	echo "No library directory '$LIBRARY_DIR'"
+	exit 1
+fi
+case "$1" in
+"add")
+	FILE=$(realpath "$2")
+	if [ ! -f "$FILE" ]; then
+		echo "No file '$FILE'"
+		exit 1
+	fi
+	osascript -l JavaScript - "$FILE" <<JS
+ObjC.import('stdlib');
+
+function run(argv) {
+	Application('iTunes').add(Path(argv[0]));
+	$.exit(0);
+}
+JS
+	;;
+"clean")
+	osascript -l JavaScript - <<JS
+ObjC.import('stdlib');
+ObjC.import('stdio');
+
+function run() {
+	var tracks = Application('iTunes').sources.libraryPlaylists[0].fileTracks;
+	var tracksRemoved = 0;
+	var tracksLeft = tracks.length;
+	while (tracksLeft > 0) {
+		tracksLeft--;
+		if (tracks[tracksLeft].location() === null) {
+			tracks[tracksLeft].delete();
+			tracksRemoved++;
+		}
+	}
+	$.printf(tracksRemoved + '\n');
+	$.exit(0);
+}
+JS
+	;;
+"list")
+	osascript -l JavaScript - "$2" <<JS
+ObjC.import('stdlib');
+ObjC.import('stdio');
+
+function run(argv) {
+	var iTunes = Application('iTunes');
+	var tracks = iTunes.sources.libraryPlaylists[0].fileTracks;
+	for (var index = 0, length = tracks.length; index < length; index++) {
+		var location = tracks[index].location();
+		if (location === null) {
+			continue;
+		}
+		
+		ObjC.bindFunction('printf', ['int', ['string']]);
+		$.printf(location);
+		if (argv[0] === '-print0') {
+			ObjC.bindFunction('printf', ['int', ['string', 'int']]);
+			$.printf('%c', 0);
+		} else {
+			$.printf('\n');
+		}
+	}
+	$.exit(0);
+}
+JS
+	;;
+*)
+	LOG_DIR=$(realpath "$LOG_DIR")
+	LOG_FILE="$LOG_DIR/sr-sync-itunes-library ($(date -u +'%Y-%m-%dT%H-%M-%SZ')).log"
+	if [ -d "$LOG_DIR" ]; then
+		touch "$LOG_FILE"
+	fi
+	THIS=$(realpath "$BASH_SOURCE")
+	
+	CLEANED=$("$THIS" clean)
+	if [[ ! "$CLEANED" == "0" ]]; then
+		log "$LOG_FILE" "Cleaned $CLEANED files"
+	fi
+	
+	LIST=$("$THIS" list -print0 | xxd -p)
+	while IFS= read -r -d '' file; do
+		FOUND=false
+		while IFS= read -r -d '' list_file; do
+			if equal_path "$file" "$list_file"; then
+				FOUND=true
+				break
+			fi
+		done < <(echo -n "$LIST" | xxd -r -p)
+		if ! $FOUND; then
+			"$THIS" add "$file"
+			log "$LOG_FILE" "Added '$file'"
+		fi
+	done < <(find "$LIBRARY_DIR" -type f \( -name '*.m4a' -or -name '*.mp3' \) -print0)
+	;;
+esac
