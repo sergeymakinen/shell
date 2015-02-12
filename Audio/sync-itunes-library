@@ -4,8 +4,8 @@
 # Parameters
 #
 
-LIBRARY_DIR="/Users/sergeyreznikov/Lossy Music"
-LOG_DIR="/Users/sergeyreznikov/Logs"
+LIBRARY_DIR="~/Lossy Music"
+LOG_DIR="~/Library/Logs/com.sergeyreznikov.SynciTunesLibrary"
 
 #
 #
@@ -29,7 +29,7 @@ function log {
 }
 
 function realpath {
-	python -c "import os, sys; print os.path.realpath(sys.argv[1]);" "$1"
+	python -c "import os, sys; print os.path.realpath(os.path.expanduser(sys.argv[1]));" "$1"
 }
 
 LIBRARY_DIR=$(realpath "$LIBRARY_DIR")
@@ -103,7 +103,7 @@ JS
 	;;
 *)
 	LOG_DIR=$(realpath "$LOG_DIR")
-	LOG_FILE="$LOG_DIR/sr-sync-itunes-library ($(date -u +'%Y-%m-%dT%H-%M-%SZ')).log"
+	LOG_FILE="$LOG_DIR/$(date -u +'%Y-%m-%dT%H-%M-%SZ').log"
 	if [ -d "$LOG_DIR" ]; then
 		touch "$LOG_FILE"
 	fi

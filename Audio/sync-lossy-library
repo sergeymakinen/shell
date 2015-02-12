@@ -5,8 +5,8 @@
 #
 
 LOSSLESS_DIR="/Volumes/Archive/Audio/Music"
-LOSSY_DIR="/Users/sergeyreznikov/Lossy Music"
-LOG_DIR="/Users/sergeyreznikov/Logs"
+LOSSY_DIR="~/Lossy Music"
+LOG_DIR="~/Library/Logs/com.sergeyreznikov.SyncLossyLibrary"
 
 #
 # Requires MediaInfo, XLD
@@ -30,7 +30,7 @@ function log {
 }
 
 function realpath {
-	python -c "import os, sys; print os.path.realpath(sys.argv[1]);" "$1"
+	python -c "import os, sys; print os.path.realpath(os.path.expanduser(sys.argv[1]));" "$1"
 }
 
 function requires_encoding {
@@ -58,7 +58,7 @@ if [ ! -d "$LOSSY_DIR" ]; then
 fi
 LOSSY_DIR_LENGTH=${#LOSSY_DIR}
 LOG_DIR=$(realpath "$LOG_DIR")
-LOG_FILE="$LOG_DIR/sr-sync-lossy-library ($(date -u +'%Y-%m-%dT%H-%M-%SZ')).log"
+LOG_FILE="$LOG_DIR/$(date -u +'%Y-%m-%dT%H-%M-%SZ').log"
 if [ -d "$LOG_DIR" ]; then
 	touch "$LOG_FILE"
 fi
