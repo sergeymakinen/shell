@@ -4,8 +4,9 @@
 # Parameters
 #
 
-LIBRARY_DIR="~/Lossy Music"
-LOG_DIR="~/Library/Logs/com.sergeyreznikov.SynciTunesLibrary"
+LIBRARY_PATH="~/Lossy Music"
+
+LOG_PATH="~/Library/Logs/com.sergeyreznikov.SynciTunesLibrary"
 
 #
 #
@@ -32,9 +33,9 @@ function realpath {
 	python -c "import os, sys; print os.path.realpath(os.path.expanduser(sys.argv[1]));" "$1"
 }
 
-LIBRARY_DIR=$(realpath "$LIBRARY_DIR")
-if [ ! -d "$LIBRARY_DIR" ]; then
-	echo "No library directory '$LIBRARY_DIR'"
+LIBRARY_PATH=$(realpath "$LIBRARY_PATH")
+if [ ! -d "$LIBRARY_PATH" ]; then
+	echo "No library directory '$LIBRARY_PATH'"
 	exit 1
 fi
 case "$1" in
@@ -102,9 +103,9 @@ function run(argv) {
 JS
 	;;
 *)
-	LOG_DIR=$(realpath "$LOG_DIR")
-	LOG_FILE="$LOG_DIR/$(date -u +'%Y-%m-%dT%H-%M-%SZ').log"
-	if [ -d "$LOG_DIR" ]; then
+	LOG_PATH=$(realpath "$LOG_PATH")
+	LOG_FILE="$LOG_PATH/$(date -u +'%Y-%m-%dT%H-%M-%SZ').log"
+	if [ -d "$LOG_PATH" ]; then
 		touch "$LOG_FILE"
 	fi
 	THIS=$(realpath "$BASH_SOURCE")
@@ -127,6 +128,6 @@ JS
 			"$THIS" add "$file"
 			log "$LOG_FILE" "Added '$file'"
 		fi
-	done < <(find "$LIBRARY_DIR" -type f \( -name '*.m4a' -or -name '*.mp3' \) -print0)
+	done < <(find "$LIBRARY_PATH" -type f \( -name '*.m4a' -or -name '*.mp3' \) -print0)
 	;;
 esac

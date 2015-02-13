@@ -4,9 +4,11 @@
 # Parameters
 #
 
-LOSSLESS_DIR="/Volumes/Archive/Audio/Music"
-LOSSY_DIR="~/Lossy Music"
-LOG_DIR="~/Library/Logs/com.sergeyreznikov.SyncLossyLibrary"
+LOSSLESS_PATH="/Volumes/Archive/Audio/Music"
+
+LOSSY_PATH="~/Lossy Music"
+
+LOG_PATH="~/Library/Logs/com.sergeyreznikov.SyncLossyLibrary"
 
 #
 # Requires MediaInfo, XLD
@@ -45,47 +47,47 @@ function xld {
 	/Applications/XLD.app/Contents/MacOS/XLD --cmdline "$@"
 }
 
-LOSSLESS_DIR=$(realpath "$LOSSLESS_DIR")
-if [ ! -d "$LOSSLESS_DIR" ]; then
-	echo "No lossless directory '$LOSSLESS_DIR'"
+LOSSLESS_PATH=$(realpath "$LOSSLESS_PATH")
+if [ ! -d "$LOSSLESS_PATH" ]; then
+	echo "No lossless directory '$LOSSLESS_PATH'"
 	exit 1
 fi
-LOSSLESS_DIR_LENGTH=${#LOSSLESS_DIR}
-LOSSY_DIR=$(realpath "$LOSSY_DIR")
-if [ ! -d "$LOSSY_DIR" ]; then
-	echo "No lossy directory '$LOSSY_DIR'"
+LOSSLESS_PATH_LENGTH=${#LOSSLESS_PATH}
+LOSSY_PATH=$(realpath "$LOSSY_PATH")
+if [ ! -d "$LOSSY_PATH" ]; then
+	echo "No lossy directory '$LOSSY_PATH'"
 	exit 1
 fi
-LOSSY_DIR_LENGTH=${#LOSSY_DIR}
-LOG_DIR=$(realpath "$LOG_DIR")
-LOG_FILE="$LOG_DIR/$(date -u +'%Y-%m-%dT%H-%M-%SZ').log"
-if [ -d "$LOG_DIR" ]; then
+LOSSY_PATH_LENGTH=${#LOSSY_PATH}
+LOG_PATH=$(realpath "$LOG_PATH")
+LOG_FILE="$LOG_PATH/$(date -u +'%Y-%m-%dT%H-%M-%SZ').log"
+if [ -d "$LOG_PATH" ]; then
 	touch "$LOG_FILE"
 fi
 
 # Added/updated
 while IFS= read -r -d '' lossless_file; do
-	lossless_substring=${lossless_file:$LOSSLESS_DIR_LENGTH}
-	if ! equal_left_right "$lossless_file" "$LOSSY_DIR$lossless_substring"; then
-		mkdir -p "$(dirname "$LOSSY_DIR$lossless_substring")"
+	lossless_substring=${lossless_file:$LOSSLESS_PATH_LENGTH}
+	if ! equal_left_right "$lossless_file" "$LOSSY_PATH$lossless_substring"; then
+		mkdir -p "$(dirname "$LOSSY_PATH$lossless_substring")"
 		if requires_encoding "$lossless_file"; then
-			xld --profile Lossy -o "$LOSSY_DIR$lossless_substring" "$lossless_file"
+			xld --profile Lossy -o "$LOSSY_PATH$lossless_substring" "$lossless_file"
 			log "$LOG_FILE" "Encoded '$lossless_substring'"
 		else
-			cp "$lossless_file" "$LOSSY_DIR$lossless_substring"
+			cp "$lossless_file" "$LOSSY_PATH$lossless_substring"
 			log "$LOG_FILE" "Copied '$lossless_substring'"
 		fi
-		if [ -f "$LOSSY_DIR$lossless_substring" ]; then
-			touch -r "$lossless_file" "$LOSSY_DIR$lossless_substring"
+		if [ -f "$LOSSY_PATH$lossless_substring" ]; then
+			touch -r "$lossless_file" "$LOSSY_PATH$lossless_substring"
 		fi
 	fi
-done < <(find "$LOSSLESS_DIR" -type f \( -name '*.m4a' -or -name '*.mp3' \) -print0)
+done < <(find "$LOSSLESS_PATH" -type f \( -name '*.m4a' -or -name '*.mp3' \) -print0)
 
 # Removed
 while IFS= read -r -d '' lossy; do
-	lossy_substring=${lossy:$LOSSY_DIR_LENGTH}
-	if ( [ -d "$lossy" ] && [ ! -d "$LOSSLESS_DIR$lossy_substring" ] ) || ( [ -f "$lossy" ] && [ ! -f "$LOSSLESS_DIR$lossy_substring" ] ); then
+	lossy_substring=${lossy:$LOSSY_PATH_LENGTH}
+	if ( [ -d "$lossy" ] && [ ! -d "$LOSSLESS_PATH$lossy_substring" ] ) || ( [ -f "$lossy" ] && [ ! -f "$LOSSLESS_PATH$lossy_substring" ] ); then
 		rm -drf "$lossy"
 		log "$LOG_FILE" "Removed '$lossy_substring'"
 	fi
-done < <(find "$LOSSY_DIR" -print0)
+done < <(find "$LOSSY_PATH" -print0)
