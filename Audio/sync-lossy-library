@@ -60,7 +60,7 @@ if [ ! -d "$LOSSY_PATH" ]; then
 fi
 LOSSY_PATH_LENGTH=${#LOSSY_PATH}
 LOG_PATH=$(realpath "$LOG_PATH")
-LOG_FILE="$LOG_PATH/$(date -u +'%Y-%m-%dT%H-%M-%SZ').log"
+LOG_FILE="$LOG_PATH/$(date +'%Y-%m-%dT%H-%M-%S%z').log"
 if [ -d "$LOG_PATH" ]; then
 	touch "$LOG_FILE"
 fi
