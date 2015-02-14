@@ -252,11 +252,15 @@ def log(file_path, message):
         log_file_obj.close()
 
 
-LOCAL_PATH = os.path.realpath(os.path.expanduser(LOCAL_PATH))
+def realpath(path):
+    return os.path.realpath(os.path.expandvars(os.path.expanduser(path)))
+
+
+LOCAL_PATH = realpath(LOCAL_PATH)
 if not os.path.isdir(LOCAL_PATH):
     error("No backup directory '{0}'".format(LOCAL_PATH))
 
-CACHE_PATH = os.path.realpath(os.path.expanduser(CACHE_PATH))
+CACHE_PATH = realpath(CACHE_PATH)
 if sys.platform == 'darwin':
     if not os.path.isdir(CACHE_PATH):
         os.mkdir(CACHE_PATH)
@@ -275,7 +279,7 @@ else:
 if not token:
     error('No Dropbox OAuth 2 token')
 
-LOG_PATH = os.path.realpath(os.path.expanduser(LOG_PATH))
+LOG_PATH = realpath(LOG_PATH)
 log_file = os.path.join(LOG_PATH, time.strftime('%Y-%m-%dT%H-%M-%S%z.log'))
 if os.path.isdir(LOG_PATH):
     if os.path.isfile(log_file):
