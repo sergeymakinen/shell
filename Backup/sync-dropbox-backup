@@ -47,19 +47,26 @@ class DropboxSyncClient:
 
     def sync(self):
         self._upload('/')
+        self._clean('/')
 
     def _log(self, message):
         if self._logger:
             self._logger(message)
 
-    def _log_path_exception(self, path, caller, exception):
+    def _log_exception(self, operation, path, caller, exception):
         if isinstance(exception, ErrorResponse):
             message = "code = {0}, message = '{1}'".format(exception.status, exception.error_msg)
         elif isinstance(exception, (OSError, IOError)):
             message = "code = {0}, message = '{1}'".format(exception.errno, exception.strerror)
         else:
             message = 'unknown exception'
-        self._log("Skipped '{0}': {1}() raised {2}, {3}".format(path, caller, type(exception).__name__, message))
+        self._log("Skipped {0} '{1}': {2}() raised {3}, {4}".format(operation, path, caller, type(exception).__name__, message))
+
+    def _log_clean_exception(self, path, caller, exception):
+        self._log_exception('cleaning', path, caller, exception)
+
+    def _log_upload_exception(self, path, caller, exception):
+        self._log_exception('uploading', path, caller, exception)
 
     def _dropbox_action(self, action):
         retries_left = self._max_retries
@@ -96,14 +103,6 @@ class DropboxSyncClient:
     def _dropbox_upload_chunked(self, uploader, path):
         return self._dropbox_action(lambda: uploader.finish(path, True))
 
-    def _delete(self, path):
-        metadata = self._dropbox_metadata(path, True)
-        if 'contents' in metadata:
-            for enclosed_metadata in metadata['contents']:
-                self._delete(enclosed_metadata['path'])
-        else:
-            self._dropbox_delete(path)
-
     def _init_state_db(self):
         self._state_db = connect(os.path.join(self._cache_path, 'state.db'), isolation_level=None)
         self._connection = self._state_db.cursor()
@@ -131,6 +130,53 @@ class DropboxSyncClient:
     def _set_file_state(self, path, modified, size, metadata):
         self._connection.execute('INSERT OR REPLACE INTO `files` VALUES(?, ?, ?, ?)', (path, modified, size, metadata['rev']))
 
+    def _clean(self, relative_path):
+        path = self._path
+        local_path = self._local_path
+        if relative_path != '/':
+            path = posixpath.join(path, relative_path.lstrip('/'))
+            local_path = os.path.join(local_path, os.path.normpath(relative_path.lstrip('/')))
+        metadata = None
+        try:
+            metadata = self._dropbox_metadata(path, True)
+        except ErrorResponse, e:
+            if e.status != 404:
+                self._log_clean_exception(relative_path, 'DropboxClient.metadata', e)
+                return
+
+        if not metadata or 'is_deleted' in metadata:
+            return
+
+        if 'contents' in metadata:
+            for enclosed_metadata in metadata['contents']:
+                if 'is_deleted' in enclosed_metadata:
+                    continue
+
+                enclosed_name = posixpath.basename(enclosed_metadata['path'])
+                relative_enclosed_path = posixpath.join(relative_path, enclosed_name)
+                enclosed_path = posixpath.join(path, enclosed_name)
+                enclosed_local_path = os.path.join(local_path, enclosed_name)
+
+                if enclosed_metadata['is_dir']:
+                    self._clean(relative_enclosed_path)
+                else:
+                    if not os.path.isfile(enclosed_local_path):
+                        try:
+                            self._dropbox_delete(enclosed_path)
+                        except ErrorResponse, e:
+                            self._log_clean_exception(relative_enclosed_path, 'DropboxClient.file_delete', e)
+                            continue
+
+                        self._log("Removed '{0}'".format(relative_enclosed_path))
+        if not os.path.isdir(local_path):
+            try:
+                self._dropbox_delete(path)
+            except ErrorResponse, e:
+                self._log_clean_exception(relative_path, 'DropboxClient.file_delete', e)
+                return
+
+            self._log("Removed '{0}'".format(relative_path))
+
     def _upload(self, relative_path):
         path = self._path
         local_path = self._local_path
@@ -142,14 +188,14 @@ class DropboxSyncClient:
             metadata = self._dropbox_metadata(path, False)
         except ErrorResponse, e:
             if e.status != 404:
-                self._log_path_exception(relative_path, 'DropboxClient.metadata', e)
+                self._log_upload_exception(relative_path, 'DropboxClient.metadata', e)
                 return
 
         if not metadata or 'is_deleted' in metadata:
             try:
                 self._dropbox_create_dir(path)
             except ErrorResponse, e:
-                self._log_path_exception(relative_path, 'DropboxClient.file_create_folder', e)
+                self._log_upload_exception(relative_path, 'DropboxClient.file_create_folder', e)
                 return
         elif not metadata['is_dir']:
             self._log("Skipped '{0}': a file with the similar path exists".format(relative_path))
@@ -158,7 +204,7 @@ class DropboxSyncClient:
         try:
             entries = os.listdir(local_path)
         except OSError, e:
-            self._log_path_exception(local_path, 'os.listdir', e)
+            self._log_upload_exception(local_path, 'os.listdir', e)
             return
 
         for entry in entries:
@@ -172,13 +218,13 @@ class DropboxSyncClient:
                 try:
                     entry_modified = os.path.getmtime(entry_local_path)
                 except OSError, e:
-                    self._log_path_exception(relative_entry_path, 'os.path.getmtime', e)
+                    self._log_upload_exception(relative_entry_path, 'os.path.getmtime', e)
                     continue
 
                 try:
                     entry_size = os.path.getsize(entry_local_path)
                 except OSError, e:
-                    self._log_path_exception(relative_entry_path, 'os.path.getsize', e)
+                    self._log_upload_exception(relative_entry_path, 'os.path.getsize', e)
                     continue
 
                 entry_metadata = None
@@ -186,7 +232,7 @@ class DropboxSyncClient:
                     entry_metadata = self._dropbox_metadata(entry_path, False)
                 except ErrorResponse, e:
                     if e.status != 404:
-                        self._log_path_exception(relative_entry_path, 'DropboxClient.metadata', e)
+                        self._log_upload_exception(relative_entry_path, 'DropboxClient.metadata', e)
                         continue
 
                 if self._find_file_state(entry_local_path, entry_modified, entry_size, entry_metadata):
@@ -195,7 +241,7 @@ class DropboxSyncClient:
                 try:
                     entry_file_obj = open(entry_local_path, 'rb')
                 except IOError, e:
-                    self._log_path_exception(relative_entry_path, 'open', e)
+                    self._log_upload_exception(relative_entry_path, 'open', e)
                     continue
 
                 caller = None
@@ -209,7 +255,7 @@ class DropboxSyncClient:
                         caller = 'ChunkedUploader.finish'
                         entry_metadata = self._dropbox_upload_chunked(uploader, entry_path)
                 except ErrorResponse, e:
-                    self._log_path_exception(relative_entry_path, caller, e)
+                    self._log_upload_exception(relative_entry_path, caller, e)
                     continue
                 except:
                     raise
