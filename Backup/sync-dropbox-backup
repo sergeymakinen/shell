@@ -74,10 +74,8 @@ class DropboxSyncClient:
             retries_left -= 1
             try:
                 return action()
-            except ErrorResponse:
-                raise
-            except:
-                if retries_left == 0:
+            except Exception, e:
+                if retries_left == 0 or (isinstance(e, ErrorResponse) and e.status != 429):
                     raise
                 else:
                     time.sleep((self._max_retries - retries_left) * 5)
@@ -198,7 +196,7 @@ class DropboxSyncClient:
                 self._log_upload_exception(relative_path, 'DropboxClient.file_create_folder', e)
                 return
         elif not metadata['is_dir']:
-            self._log("Skipped '{0}': a file with the similar path exists".format(relative_path))
+            self._log("Skipped uploading '{0}': a file with the similar path exists".format(relative_path))
             return
 
         try:
