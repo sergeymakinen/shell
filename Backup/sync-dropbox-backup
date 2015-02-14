@@ -202,7 +202,7 @@ class DropboxSyncClient:
         try:
             entries = os.listdir(local_path)
         except OSError, e:
-            self._log_upload_exception(local_path, 'os.listdir', e)
+            self._log_upload_exception(relative_path, 'os.listdir', e)
             return
 
         for entry in entries:
