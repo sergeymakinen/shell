@@ -9,7 +9,7 @@ from __future__ import print_function, unicode_literals
 
 DROPBOX_PATH = '/Test'
 
-LOCAL_PATH = '~/Documents/Aspyr'
+LOCAL_PATH = '~/Library/Application Support/Google'
 
 CACHE_PATH = '~/Library/Caches/com.sergeyreznikov.SyncDropboxBackup'
 
@@ -34,6 +34,12 @@ from sqlite3 import connect
 
 
 class DropboxSyncClient:
+    @staticmethod
+    def _find_entry_metadata(metadata, name):
+        if metadata and 'contents' in metadata:
+            for enclosed_metadata in metadata['contents']:
+                if posixpath.basename(enclosed_metadata['path']) == name:
+                    return enclosed_metadata
 
     def __init__(self, token, path, local_path, cache_path, max_retries=10, logger=None):
         self._client = DropboxClient(token, 'en_US')
@@ -75,7 +81,7 @@ class DropboxSyncClient:
             try:
                 return action()
             except Exception, e:
-                if retries_left == 0 or (isinstance(e, ErrorResponse) and e.status != 429):
+                if retries_left == 0 or (isinstance(e, ErrorResponse) and (e.status != 429 or e.status < 500)):
                     raise
                 else:
                     time.sleep((self._max_retries - retries_left) * 5)
@@ -183,7 +189,7 @@ class DropboxSyncClient:
             local_path = os.path.join(local_path, os.path.normpath(relative_path.lstrip('/')))
         metadata = None
         try:
-            metadata = self._dropbox_metadata(path, False)
+            metadata = self._dropbox_metadata(path, True)
         except ErrorResponse, e:
             if e.status != 404:
                 self._log_upload_exception(relative_path, 'DropboxClient.metadata', e)
@@ -225,13 +231,7 @@ class DropboxSyncClient:
                     self._log_upload_exception(relative_entry_path, 'os.path.getsize', e)
                     continue
 
-                entry_metadata = None
-                try:
-                    entry_metadata = self._dropbox_metadata(entry_path, False)
-                except ErrorResponse, e:
-                    if e.status != 404:
-                        self._log_upload_exception(relative_entry_path, 'DropboxClient.metadata', e)
-                        continue
+                entry_metadata = DropboxSyncClient._find_entry_metadata(metadata, entry)
 
                 if self._find_file_state(entry_local_path, entry_modified, entry_size, entry_metadata):
                     continue
