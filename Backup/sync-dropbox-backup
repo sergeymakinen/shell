@@ -17,7 +17,7 @@ LOG_PATH = '~/Library/Logs/com.sergeyreznikov.SyncDropboxBackup'
 
 TOKEN_FILE_NAME = '/etc/sync-dropbox-backup'
 
-DROPBOX_PUT_SIZE_LIMIT = 10 * 1024 * 1024
+DROPBOX_PUT_SIZE_LIMIT = 64 * 1024 * 1024
 
 #
 # Requires dropbox
@@ -41,19 +41,38 @@ class DropboxSyncClient:
                 if posixpath.basename(enclosed_metadata['path']) == name:
                     return enclosed_metadata
 
-    def __init__(self, token, path, local_path, cache_path, max_retries=10, logger=None):
+    @staticmethod
+    def _includes_subdirectories(metadata):
+        if 'contents' in metadata:
+            for enclosed_metadata in metadata['contents']:
+                if enclosed_metadata['is_dir']:
+                    return True
+        return False
+
+    def __init__(self, token, path, local_path, cache_path,
+                 put_size_limit=64 * 1024 * 1024, chunk_size=16 * 1024 * 1024, max_retries=10, logger=None):
         self._client = DropboxClient(token, 'en_US')
         self._path = path
         self._local_path = local_path
         self._cache_path = cache_path
+        self._put_size_limit = put_size_limit
+        self._chunk_size = chunk_size
         self._max_retries = max_retries
         self._logger = logger
+        self._stats = {
+            'calls': 0,
+            'errors': 0,
+            'retries': 0,
+            'uploaded_bytes': 0
+        }
         self._init_state_db()
 
-
     def sync(self):
+        for name in self._stats:
+            self._stats[name] = 0
         self._upload('/')
         self._clean('/')
+        return self._stats
 
     def _log(self, message):
         if self._logger:
@@ -61,6 +80,7 @@ class DropboxSyncClient:
 
     def _log_exception(self, operation, path, caller, exception):
         if isinstance(exception, ErrorResponse):
+            self._stats['errors'] += 1
             message = "code = {0}, message = '{1}'".format(exception.status, exception.error_msg)
         elif isinstance(exception, (OSError, IOError)):
             message = "code = {0}, message = '{1}'".format(exception.errno, exception.strerror)
@@ -79,11 +99,13 @@ class DropboxSyncClient:
         while True:
             retries_left -= 1
             try:
+                self._stats['calls'] += 1
                 return action()
             except Exception, e:
                 if retries_left == 0 or (isinstance(e, ErrorResponse) and (e.status != 429 or e.status < 500)):
                     raise
                 else:
+                    self._stats['retries'] += 1
                     time.sleep((self._max_retries - retries_left) * 5)
 
     def _dropbox_create_dir(self, path):
@@ -101,7 +123,7 @@ class DropboxSyncClient:
     def _dropbox_upload_chunks(self, file_obj, file_size):
         uploader = self._client.get_chunked_uploader(file_obj, file_size)
         while uploader.offset < file_size:
-            self._dropbox_action(lambda: uploader.upload_chunked())
+            self._dropbox_action(lambda: uploader.upload_chunked(self._chunk_size))
         return uploader
 
     def _dropbox_upload_chunked(self, uploader, path):
@@ -151,6 +173,16 @@ class DropboxSyncClient:
         if not metadata or 'is_deleted' in metadata:
             return
 
+        if not os.path.isdir(local_path) and not DropboxSyncClient._includes_subdirectories(metadata):
+            try:
+                self._dropbox_delete(path)
+            except ErrorResponse, e:
+                self._log_clean_exception(relative_path, 'DropboxClient.file_delete', e)
+                return
+
+            self._log("Removed '{0}'".format(relative_path))
+            return
+
         if 'contents' in metadata:
             for enclosed_metadata in metadata['contents']:
                 if 'is_deleted' in enclosed_metadata:
@@ -178,8 +210,6 @@ class DropboxSyncClient:
             except ErrorResponse, e:
                 self._log_clean_exception(relative_path, 'DropboxClient.file_delete', e)
                 return
-
-            self._log("Removed '{0}'".format(relative_path))
 
     def _upload(self, relative_path):
         path = self._path
@@ -244,7 +274,7 @@ class DropboxSyncClient:
 
                 caller = None
                 try:
-                    if entry_size <= DROPBOX_PUT_SIZE_LIMIT:
+                    if entry_size <= self._put_size_limit:
                         caller = 'DropboxClient.put_file'
                         entry_metadata = self._dropbox_upload(entry_path, entry_file_obj)
                     else:
@@ -261,6 +291,7 @@ class DropboxSyncClient:
                     entry_file_obj.close()
 
                 self._set_file_state(entry_local_path, entry_modified, entry_size, entry_metadata)
+                self._stats['uploaded_bytes'] += entry_size
                 self._log("Uploaded '{0}'".format(relative_entry_path))
 
 
@@ -274,6 +305,17 @@ def decode_keychain_password(hex):
 def error(message):
     print(message)
     sys.exit(1)
+
+
+def format_size(size):
+    size = float(size)
+    unit = 'TB'
+    for current_unit in ['bytes', 'KB', 'MB', 'GB']:
+        if size < 1024:
+            unit = current_unit
+            break
+        size /= 1024
+    return '{0:.2f}'.format(size).rstrip('0').rstrip('.') + ' ' + unit
 
 
 def get_token():
@@ -332,4 +374,17 @@ if os.path.isdir(LOG_PATH):
         open(log_file, 'a').close()
 
 sync_client = DropboxSyncClient(token, DROPBOX_PATH, LOCAL_PATH, CACHE_PATH, logger=lambda message: log(log_file, message))
-sync_client.sync()
+try:
+    stats = sync_client.sync()
+except Exception, e:
+    try:
+        message = str(e)
+    except:
+        message = 'no information available'
+    log(log_file, 'Fatal exception {0} occured: {1}'.format(type(e).__name__, message))
+    sys.exit(1)
+
+log(log_file, 'Sync finished, errors: {0}, retries: {1}, uploaded: {2}, Dropbox API calls: {3}'.format(stats['errors'],
+                                                                                                       stats['retries'],
+                                                                                                       format_size(stats['uploaded_bytes']),
+                                                                                                       stats['calls']))
