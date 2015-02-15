@@ -23,7 +23,7 @@ Removes “dead” files from the iTunes library. Then adds \*.mp3 and \*.m4a fi
 
 Uploads files (preserving directories) from *LOCAL_PATH* to *DROPBOX_PATH* at Dropbox (if they don't already exist or their size/time modified/Dropbox revision changed) and removes files from *LOCAL_PATH* that don't exist in *DROPBOX_PATH* at Dropbox.
 
-Maintains its state in a SQLite 3 database placed in *CACHE_PATH*. On non-OS X systems reads Dropbox OAuth 2 token from *TOKEN\_FILE\_NAME* file, *TOKEN\_FILE\_NAME* format:
+Maintains its state in a SQLite 3 database placed in *CACHE_PATH*. On OS X it reads a Dropbox OAuth 2 token from a system Keychain, on non-OS X systems it reads the token from file located at *TOKEN\_FILE\_PATH* with the following format:
 
 ```bash
 TOKEN="dropbox-oauth-token"

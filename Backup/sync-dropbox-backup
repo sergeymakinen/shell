@@ -15,7 +15,7 @@ CACHE_PATH = '~/Library/Caches/com.sergeyreznikov.SyncDropboxBackup'
 
 LOG_PATH = '~/Library/Logs/com.sergeyreznikov.SyncDropboxBackup'
 
-TOKEN_FILE_NAME = '/etc/sync-dropbox-backup'
+TOKEN_FILE_PATH = '/etc/sync-dropbox-backup'
 
 DROPBOX_PUT_SIZE_LIMIT = 64 * 1024 * 1024
 
@@ -33,16 +33,16 @@ from dropbox.rest import ErrorResponse
 from sqlite3 import connect
 
 
-class DropboxSyncClient:
+class DropboxSyncClient(object):
     @staticmethod
-    def _find_entry_metadata(metadata, name):
+    def _find_enclosed_metadata(metadata, name):
         if metadata and 'contents' in metadata:
             for enclosed_metadata in metadata['contents']:
                 if posixpath.basename(enclosed_metadata['path']) == name:
                     return enclosed_metadata
 
     @staticmethod
-    def _includes_subdirectories(metadata):
+    def _includes_subdirs(metadata):
         if 'contents' in metadata:
             for enclosed_metadata in metadata['contents']:
                 if enclosed_metadata['is_dir']:
@@ -102,7 +102,8 @@ class DropboxSyncClient:
                 self._stats['calls'] += 1
                 return action()
             except Exception, e:
-                if retries_left == 0 or (isinstance(e, ErrorResponse) and (e.status != 429 and e.status < 500)):
+                # Allow retries on 429 (too many requests) and 5xx (usually temporary server errors) errors
+                if retries_left == 0 or (isinstance(e, ErrorResponse) and e.status != 429 and e.status < 500):
                     raise
                 else:
                     self._stats['retries'] += 1
@@ -173,7 +174,7 @@ class DropboxSyncClient:
         if not metadata or 'is_deleted' in metadata:
             return
 
-        if not os.path.isdir(local_path) and not DropboxSyncClient._includes_subdirectories(metadata):
+        if not os.path.isdir(local_path) and not DropboxSyncClient._includes_subdirs(metadata):
             try:
                 self._dropbox_delete(path)
             except ErrorResponse, e:
@@ -261,7 +262,7 @@ class DropboxSyncClient:
                     self._log_upload_exception(relative_entry_path, 'os.path.getsize', e)
                     continue
 
-                entry_metadata = DropboxSyncClient._find_entry_metadata(metadata, entry)
+                entry_metadata = DropboxSyncClient._find_enclosed_metadata(metadata, entry)
 
                 if self._find_file_state(entry_local_path, entry_modified, entry_size, entry_metadata):
                     continue
@@ -355,11 +356,11 @@ else:
     if not os.path.isdir(CACHE_PATH):
         error("No cache directory '{0}'".format(CACHE_PATH))
 
-    if not os.path.isfile(TOKEN_FILE_NAME):
-        error("No token file '{0}'".format(TOKEN_FILE_NAME))
+    if not os.path.isfile(TOKEN_FILE_PATH):
+        error("No token file '{0}'".format(TOKEN_FILE_PATH))
 
     TOKEN = None
-    execfile(TOKEN_FILE_NAME)
+    execfile(TOKEN_FILE_PATH)
     token = TOKEN
 
 if not token:
