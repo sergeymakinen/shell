@@ -102,7 +102,7 @@ class DropboxSyncClient:
                 self._stats['calls'] += 1
                 return action()
             except Exception, e:
-                if retries_left == 0 or (isinstance(e, ErrorResponse) and (e.status != 429 or e.status < 500)):
+                if retries_left == 0 or (isinstance(e, ErrorResponse) and (e.status != 429 and e.status < 500)):
                     raise
                 else:
                     self._stats['retries'] += 1
