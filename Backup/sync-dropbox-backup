@@ -34,6 +34,30 @@ from sqlite3 import connect
 
 
 class DropboxSyncClient(object):
+    _IGNORED_FILE_NAMES = [
+        'desktop.ini',
+        'thumbs.db',
+        '.ds_store',
+        'icon\r',
+        '.dropbox',
+        '.dropbox.attr'
+    ]
+
+    # https://www.dropbox.com/en/help/145
+    @staticmethod
+    def _ignored_file_name(name):
+        if name.startswith('~$') or name.startswith('.~'):
+            return True
+        else:
+            name = name.lower()
+            if name in DropboxSyncClient._IGNORED_FILE_NAMES:
+                return True
+            elif name.startswith('~') and name.endswith('.tmp'):
+                return True
+            else:
+                return False
+
+
     def __init__(self, token, path, local_path, cache_path,
                  put_size_limit=64 * 1024 * 1024, chunk_size=16 * 1024 * 1024, max_retries=10, logger=None):
         self._client = DropboxClient(token, 'en_US')
@@ -207,7 +231,6 @@ class DropboxSyncClient(object):
 
             rel_path = '/' + path[rel_path_len:]
             try:
-                pass
                 self._dropbox_delete(path)
             except ErrorResponse, e:
                 self._log_clean_exception(rel_path, 'DropboxClient.file_delete', e)
@@ -261,6 +284,9 @@ class DropboxSyncClient(object):
             return
 
         for entry in entries:
+            if DropboxSyncClient._ignored_file_name(entry):
+                continue
+
             rel_entry_path = posixpath.join(rel_path, entry)
             entry_path = posixpath.join(path, entry)
             entry_local_path = os.path.join(local_path, entry)
