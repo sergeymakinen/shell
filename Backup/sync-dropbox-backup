@@ -34,21 +34,6 @@ from sqlite3 import connect
 
 
 class DropboxSyncClient(object):
-    @staticmethod
-    def _find_enclosed_metadata(metadata, name):
-        if metadata and 'contents' in metadata:
-            for enclosed_metadata in metadata['contents']:
-                if posixpath.basename(enclosed_metadata['path']) == name:
-                    return enclosed_metadata
-
-    @staticmethod
-    def _includes_subdirs(metadata):
-        if 'contents' in metadata:
-            for enclosed_metadata in metadata['contents']:
-                if enclosed_metadata['is_dir']:
-                    return True
-        return False
-
     def __init__(self, token, path, local_path, cache_path,
                  put_size_limit=64 * 1024 * 1024, chunk_size=16 * 1024 * 1024, max_retries=10, logger=None):
         self._client = DropboxClient(token, 'en_US')
@@ -65,13 +50,21 @@ class DropboxSyncClient(object):
             'retries': 0,
             'uploaded_bytes': 0
         }
+        self._init_cache_db()
+        self._init_clean_db()
         self._init_state_db()
 
     def sync(self):
         for name in self._stats:
             self._stats[name] = 0
-        self._upload('/')
-        self._clean('/')
+        try:
+            self._cache()
+        except ErrorResponse:
+            return self._stats
+
+        self._clean()
+        self._upload()
+        self._clean_dbs()
         return self._stats
 
     def _log(self, message):
@@ -109,14 +102,11 @@ class DropboxSyncClient(object):
                     self._stats['retries'] += 1
                     time.sleep((self._max_retries - retries_left) * 5)
 
-    def _dropbox_create_dir(self, path):
-        self._dropbox_action(lambda: self._client.file_create_folder(path))
-
     def _dropbox_delete(self, path):
         self._dropbox_action(lambda: self._client.file_delete(path))
 
-    def _dropbox_metadata(self, path, list):
-        return self._dropbox_action(lambda: self._client.metadata(path, list))
+    def _dropbox_delta(self, cursor):
+        return self._dropbox_action(lambda: self._client.delta(cursor, self._path))
 
     def _dropbox_upload(self, path, file_obj):
         return self._dropbox_action(lambda: self._client.put_file(path, file_obj, True))
@@ -130,10 +120,106 @@ class DropboxSyncClient(object):
     def _dropbox_upload_chunked(self, uploader, path):
         return self._dropbox_action(lambda: uploader.finish(path, True))
 
+    def _init_cache_db(self):
+        self._cache_db = connect(os.path.join(self._cache_path, 'cache.db'), isolation_level=None)
+        self._cache_connection = self._cache_db.cursor()
+        self._cache_connection.execute('''
+        CREATE TABLE IF NOT EXISTS `metadata`(
+            `path` TEXT PRIMARY KEY,
+            `is_directory` INTEGER,
+            `revision` TEXT
+        )
+        ''')
+        self._cache_connection.execute('DELETE FROM `metadata`')
+
+    def _cache_metadata(self, metadata):
+        self._cache_connection.execute('INSERT INTO `metadata` VALUES(?, ?, ?)',
+                                       (metadata['path'], metadata['is_dir'], metadata['rev']))
+
+    def _get_metadata(self, path):
+        if path is not None:
+            self._cache_connection.execute('SELECT * FROM `metadata` WHERE `path` = ? COLLATE NOCASE', (path,))
+        metadata = self._cache_connection.fetchone()
+        if metadata:
+            return {
+                'path': metadata[0],
+                'is_dir': bool(metadata[1]),
+                'rev': metadata[2]
+            }
+
+    def _cache(self):
+        cursor = None
+        while True:
+            try:
+                delta = self._dropbox_delta(cursor)
+            except ErrorResponse, e:
+                self._log_exception('caching', '/', 'DropboxClient.delta', e)
+                raise
+
+            for path, metadata in delta['entries']:
+                if 'is_deleted' in metadata:
+                    continue
+
+                self._cache_metadata(metadata)
+
+            if delta['has_more']:
+                cursor = delta['cursor']
+            else:
+                break
+
+    def _init_clean_db(self):
+        self._clean_db = connect(os.path.join(self._cache_path, 'clean.db'), isolation_level=None)
+        self._clean_connection = self._clean_db.cursor()
+        self._clean_connection.execute('''
+        CREATE TABLE IF NOT EXISTS `queue`(
+            `path` TEXT PRIMARY KEY,
+            `is_directory` INTEGER
+        )
+        ''')
+        self._clean_connection.execute('DELETE FROM `queue`')
+
+    def _enqueue_clean(self, path, is_dir):
+        self._clean_connection.execute('INSERT INTO `queue` VALUES(?, ?)', (path, is_dir))
+
+    def _dequeue_clean(self):
+        data = self._clean_connection.execute('''
+        SELECT `path` FROM `queue` ORDER BY `path` COLLATE NOCASE DESC, `is_directory` ASC LIMIT 1
+        ''').fetchone()
+        if data:
+            self._clean_connection.execute('DELETE FROM `queue` WHERE `path` = ?', (data[0],))
+            return data[0]
+
+    def _clean(self):
+        rel_path_len = len(self._path) + 1
+        self._cache_connection.execute('SELECT * FROM `metadata`')
+        while True:
+            metadata = self._get_metadata(None)
+            if not metadata:
+                break
+
+            local_path = os.path.join(self._local_path, os.path.normpath(metadata['path'][rel_path_len:]))
+            if (metadata['is_dir'] and not os.path.isdir(local_path)) or (not metadata['is_dir'] and not os.path.isfile(local_path)):
+                self._enqueue_clean(metadata['path'], metadata['is_dir'])
+        while True:
+            path = self._dequeue_clean()
+            if path is None:
+                break
+
+            rel_path = '/' + path[rel_path_len:]
+            try:
+                pass
+                self._dropbox_delete(path)
+            except ErrorResponse, e:
+                self._log_clean_exception(rel_path, 'DropboxClient.file_delete', e)
+                continue
+
+            self._log("Removed '{0}'".format(rel_path))
+
+
     def _init_state_db(self):
         self._state_db = connect(os.path.join(self._cache_path, 'state.db'), isolation_level=None)
-        self._connection = self._state_db.cursor()
-        self._connection.execute('''
+        self._state_connection = self._state_db.cursor()
+        self._state_connection.execute('''
         CREATE TABLE IF NOT EXISTS `files`(
             `file_path` TEXT PRIMARY KEY,
             `modified` INTEGER,
@@ -143,10 +229,10 @@ class DropboxSyncClient(object):
         ''')
 
     def _find_file_state(self, path, modified, size, metadata):
-        if not metadata or 'is_deleted' in metadata:
+        if not metadata:
             return False
 
-        return bool(self._connection.execute('''
+        return bool(self._state_connection.execute('''
         SELECT COUNT(*) FROM `files` WHERE
             `file_path` = ?
             AND `modified` = ?
@@ -155,122 +241,53 @@ class DropboxSyncClient(object):
         ''', (path, modified, size, metadata['rev'])).fetchone()[0])
 
     def _set_file_state(self, path, modified, size, metadata):
-        self._connection.execute('INSERT OR REPLACE INTO `files` VALUES(?, ?, ?, ?)', (path, modified, size, metadata['rev']))
+        self._state_connection.execute('INSERT OR REPLACE INTO `files` VALUES(?, ?, ?, ?)', (path, modified, size, metadata['rev']))
 
-    def _clean(self, relative_path):
+    def _upload(self, rel_path='/'):
         path = self._path
         local_path = self._local_path
-        if relative_path != '/':
-            path = posixpath.join(path, relative_path.lstrip('/'))
-            local_path = os.path.join(local_path, os.path.normpath(relative_path.lstrip('/')))
-        metadata = None
-        try:
-            metadata = self._dropbox_metadata(path, True)
-        except ErrorResponse, e:
-            if e.status != 404:
-                self._log_clean_exception(relative_path, 'DropboxClient.metadata', e)
-                return
-
-        if not metadata or 'is_deleted' in metadata:
-            return
-
-        if not os.path.isdir(local_path) and not DropboxSyncClient._includes_subdirs(metadata):
-            try:
-                self._dropbox_delete(path)
-            except ErrorResponse, e:
-                self._log_clean_exception(relative_path, 'DropboxClient.file_delete', e)
-                return
-
-            self._log("Removed '{0}'".format(relative_path))
-            return
-
-        if 'contents' in metadata:
-            for enclosed_metadata in metadata['contents']:
-                if 'is_deleted' in enclosed_metadata:
-                    continue
-
-                enclosed_name = posixpath.basename(enclosed_metadata['path'])
-                relative_enclosed_path = posixpath.join(relative_path, enclosed_name)
-                enclosed_path = posixpath.join(path, enclosed_name)
-                enclosed_local_path = os.path.join(local_path, enclosed_name)
-
-                if enclosed_metadata['is_dir']:
-                    self._clean(relative_enclosed_path)
-                else:
-                    if not os.path.isfile(enclosed_local_path):
-                        try:
-                            self._dropbox_delete(enclosed_path)
-                        except ErrorResponse, e:
-                            self._log_clean_exception(relative_enclosed_path, 'DropboxClient.file_delete', e)
-                            continue
-
-                        self._log("Removed '{0}'".format(relative_enclosed_path))
-        if not os.path.isdir(local_path):
-            try:
-                self._dropbox_delete(path)
-            except ErrorResponse, e:
-                self._log_clean_exception(relative_path, 'DropboxClient.file_delete', e)
-                return
-
-    def _upload(self, relative_path):
-        path = self._path
-        local_path = self._local_path
-        if relative_path != '/':
-            path = posixpath.join(path, relative_path.lstrip('/'))
-            local_path = os.path.join(local_path, os.path.normpath(relative_path.lstrip('/')))
-        metadata = None
-        try:
-            metadata = self._dropbox_metadata(path, True)
-        except ErrorResponse, e:
-            if e.status != 404:
-                self._log_upload_exception(relative_path, 'DropboxClient.metadata', e)
-                return
-
-        if not metadata or 'is_deleted' in metadata:
-            try:
-                self._dropbox_create_dir(path)
-            except ErrorResponse, e:
-                self._log_upload_exception(relative_path, 'DropboxClient.file_create_folder', e)
-                return
-        elif not metadata['is_dir']:
-            self._log("Skipped uploading '{0}': a file with the similar path exists".format(relative_path))
+        if rel_path != '/':
+            path = posixpath.join(path, rel_path.lstrip('/'))
+            local_path = os.path.join(local_path, os.path.normpath(rel_path.lstrip('/')))
+        metadata = self._get_metadata(path)
+        if metadata and not metadata['is_dir']:
+            self._log("Skipped uploading '{0}': a file with the similar path exists".format(rel_path))
             return
 
         try:
             entries = os.listdir(local_path)
         except OSError, e:
-            self._log_upload_exception(relative_path, 'os.listdir', e)
+            self._log_upload_exception(rel_path, 'os.listdir', e)
             return
 
         for entry in entries:
-            relative_entry_path = posixpath.join(relative_path, entry)
+            rel_entry_path = posixpath.join(rel_path, entry)
             entry_path = posixpath.join(path, entry)
             entry_local_path = os.path.join(local_path, entry)
 
             if os.path.isdir(entry_local_path):
-                self._upload(relative_entry_path)
+                self._upload(rel_entry_path)
             else:
                 try:
                     entry_modified = os.path.getmtime(entry_local_path)
                 except OSError, e:
-                    self._log_upload_exception(relative_entry_path, 'os.path.getmtime', e)
+                    self._log_upload_exception(rel_entry_path, 'os.path.getmtime', e)
                     continue
 
                 try:
                     entry_size = os.path.getsize(entry_local_path)
                 except OSError, e:
-                    self._log_upload_exception(relative_entry_path, 'os.path.getsize', e)
+                    self._log_upload_exception(rel_entry_path, 'os.path.getsize', e)
                     continue
 
-                entry_metadata = DropboxSyncClient._find_enclosed_metadata(metadata, entry)
-
+                entry_metadata = self._get_metadata(entry_path)
                 if self._find_file_state(entry_local_path, entry_modified, entry_size, entry_metadata):
                     continue
 
                 try:
                     entry_file_obj = open(entry_local_path, 'rb')
                 except IOError, e:
-                    self._log_upload_exception(relative_entry_path, 'open', e)
+                    self._log_upload_exception(rel_entry_path, 'open', e)
                     continue
 
                 caller = None
@@ -284,7 +301,7 @@ class DropboxSyncClient(object):
                         caller = 'ChunkedUploader.finish'
                         entry_metadata = self._dropbox_upload_chunked(uploader, entry_path)
                 except ErrorResponse, e:
-                    self._log_upload_exception(relative_entry_path, caller, e)
+                    self._log_upload_exception(rel_entry_path, caller, e)
                     continue
                 except:
                     raise
@@ -293,7 +310,12 @@ class DropboxSyncClient(object):
 
                 self._set_file_state(entry_local_path, entry_modified, entry_size, entry_metadata)
                 self._stats['uploaded_bytes'] += entry_size
-                self._log("Uploaded '{0}'".format(relative_entry_path))
+                self._log("Uploaded '{0}'".format(rel_entry_path))
+
+    def _clean_dbs(self):
+        self._cache_connection.execute('DELETE FROM `metadata`').execute('VACUUM')
+        self._clean_connection.execute('DELETE FROM `queue`').execute('VACUUM')
+        self._state_connection.execute('VACUUM')
 
 
 def decode_keychain_password(hex):
