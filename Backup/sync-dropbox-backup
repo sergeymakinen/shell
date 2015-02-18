@@ -37,6 +37,14 @@ from dropbox.rest import ErrorResponse
 from sqlite3 import connect
 
 
+class MaxRetryError(Exception):
+    def __init__(self, inner_exception):
+        self.inner_exception = inner_exception
+
+    def __str__(self):
+        return str(self.inner_exception)
+
+
 class DropboxSyncClient(object):
     _IGNORED_FILE_NAMES = [
         'desktop.ini',
@@ -87,7 +95,7 @@ class DropboxSyncClient(object):
             self._stats[name] = 0
         try:
             self._cache()
-        except ErrorResponse:
+        except (MaxRetryError, ErrorResponse):
             return self._stats
 
         self._clean()
@@ -101,13 +109,21 @@ class DropboxSyncClient(object):
 
     def _log_exception(self, operation, path, caller, exception):
         self._stats['errors'] += 1
-        if isinstance(exception, ErrorResponse):
-            message = "code = {0}, message = '{1}'".format(exception.status, exception.error_msg)
-        elif isinstance(exception, (OSError, IOError)):
-            message = "code = {0}, message = '{1}'".format(exception.errno, exception.strerror)
+        if isinstance(exception, MaxRetryError):
+            e = exception.inner_exception
+            prefix = 'Gave up and skipped'
         else:
-            message = 'unknown exception'
-        self._log("Skipped {0} '{1}': {2}() raised {3}, {4}".format(operation, path, caller, type(exception).__name__, message))
+            e = exception
+            prefix = 'Skipped'
+        if isinstance(e, ErrorResponse):
+            message = "code = {0}, message = '{1}'".format(e.status, e.error_msg)
+        elif isinstance(e, (OSError, IOError)):
+            message = "code = {0}, message = '{1}'".format(e.errno, e.strerror)
+        else:
+            message = str(e)
+
+        self._log("{0} {1} '{2}': {3}() raised {4}: {5}".format(prefix, operation, path,
+                                                                caller, type(e).__name__, message))
 
     def _log_clean_exception(self, path, caller, exception):
         self._log_exception('cleaning', path, caller, exception)
@@ -118,16 +134,16 @@ class DropboxSyncClient(object):
     def _dropbox_action(self, action):
         retries_left = self._max_retries
         while True:
-            retries_left -= 1
             try:
                 self._stats['calls'] += 1
                 return action()
-            except Exception, e:
+            except Exception as e:
                 # Allow retries on 429 (too many requests) and 5xx (usually temporary server errors) errors
                 if retries_left == 0 or (isinstance(e, ErrorResponse) and e.status != 429 and e.status < 500):
-                    raise
+                    raise MaxRetryError(e)
                 else:
                     self._stats['retries'] += 1
+                    retries_left -= 1
                     time.sleep((self._max_retries - retries_left) * 5)
 
     def _dropbox_delete(self, path):
@@ -180,7 +196,7 @@ class DropboxSyncClient(object):
         while True:
             try:
                 delta = self._dropbox_delta(cursor)
-            except ErrorResponse, e:
+            except (MaxRetryError, ErrorResponse) as e:
                 self._log_exception('caching', '/', 'DropboxClient.delta', e)
                 raise
 
@@ -236,7 +252,7 @@ class DropboxSyncClient(object):
             rel_path = '/' + path[rel_path_len:]
             try:
                 self._dropbox_delete(path)
-            except ErrorResponse, e:
+            except (MaxRetryError, ErrorResponse) as e:
                 self._log_clean_exception(rel_path, 'DropboxClient.file_delete', e)
                 continue
 
@@ -268,7 +284,8 @@ class DropboxSyncClient(object):
         ''', (path, modified, size, metadata['rev'])).fetchone()[0])
 
     def _set_file_state(self, path, modified, size, metadata):
-        self._state_connection.execute('INSERT OR REPLACE INTO `files` VALUES(?, ?, ?, ?)', (path, modified, size, metadata['rev']))
+        self._state_connection.execute('INSERT OR REPLACE INTO `files` VALUES(?, ?, ?, ?)',
+                                       (path, modified, size, metadata['rev']))
 
     def _upload(self, rel_path='/'):
         path = self._path
@@ -283,7 +300,7 @@ class DropboxSyncClient(object):
 
         try:
             entries = os.listdir(local_path)
-        except OSError, e:
+        except OSError as e:
             self._log_upload_exception(rel_path, 'os.listdir', e)
             return
 
@@ -300,13 +317,13 @@ class DropboxSyncClient(object):
             else:
                 try:
                     entry_modified = os.path.getmtime(entry_local_path)
-                except OSError, e:
+                except OSError as e:
                     self._log_upload_exception(rel_entry_path, 'os.path.getmtime', e)
                     continue
 
                 try:
                     entry_size = os.path.getsize(entry_local_path)
-                except OSError, e:
+                except OSError as e:
                     self._log_upload_exception(rel_entry_path, 'os.path.getsize', e)
                     continue
 
@@ -316,7 +333,7 @@ class DropboxSyncClient(object):
 
                 try:
                     entry_file_obj = open(entry_local_path, 'rb')
-                except IOError, e:
+                except IOError as e:
                     self._log_upload_exception(rel_entry_path, 'open', e)
                     continue
 
@@ -330,11 +347,9 @@ class DropboxSyncClient(object):
                         uploader = self._dropbox_upload_chunks(entry_file_obj, entry_size)
                         caller = 'ChunkedUploader.finish'
                         entry_metadata = self._dropbox_upload_chunked(uploader, entry_path)
-                except ErrorResponse, e:
+                except (MaxRetryError, ErrorResponse) as e:
                     self._log_upload_exception(rel_entry_path, caller, e)
                     continue
-                except:
-                    raise
                 finally:
                     entry_file_obj.close()
 
@@ -435,12 +450,8 @@ if os.path.isdir(LOG_PATH):
 sync_client = DropboxSyncClient(token, DROPBOX_PATH, LOCAL_PATH, CACHE_PATH, logger=lambda message: log(log_file, message))
 try:
     stats = sync_client.sync()
-except Exception, e:
-    try:
-        message = str(e)
-    except:
-        message = 'no information available'
-    log(log_file, 'Fatal exception {0} occured: {1}'.format(type(e).__name__, message))
+except Exception as e:
+    log(log_file, 'Fatal exception {0} occured: {1}'.format(type(e).__name__, str(e)))
     sys.exit(1)
 
 log(log_file, 'Sync finished, errors: {0}, retries: {1}, uploaded: {2}, Dropbox API calls: {3}'.format(stats['errors'],
