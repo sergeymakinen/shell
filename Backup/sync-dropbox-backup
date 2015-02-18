@@ -20,14 +20,18 @@ TOKEN_FILE_PATH = '/etc/sync-dropbox-backup'
 DROPBOX_PUT_SIZE_LIMIT = 64 * 1024 * 1024
 
 #
-# Requires dropbox
+# Requires dropbox, python-dateutil (only on Windows)
 #
 
 import os
 import posixpath
 import re
 import sys
-import time
+if sys.platform == 'win32':
+    from datetime import datetime
+    from dateutil import tz
+else:
+    import time
 from dropbox.client import DropboxClient
 from dropbox.rest import ErrorResponse
 from sqlite3 import connect
@@ -96,8 +100,8 @@ class DropboxSyncClient(object):
             self._logger(message)
 
     def _log_exception(self, operation, path, caller, exception):
+        self._stats['errors'] += 1
         if isinstance(exception, ErrorResponse):
-            self._stats['errors'] += 1
             message = "code = {0}, message = '{1}'".format(exception.status, exception.error_msg)
         elif isinstance(exception, (OSError, IOError)):
             message = "code = {0}, message = '{1}'".format(exception.errno, exception.strerror)
@@ -404,6 +408,7 @@ else:
     if not os.path.isdir(CACHE_PATH):
         error("No cache directory '{0}'".format(CACHE_PATH))
 
+    TOKEN_FILE_PATH = realpath(TOKEN_FILE_PATH)
     if not os.path.isfile(TOKEN_FILE_PATH):
         error("No token file '{0}'".format(TOKEN_FILE_PATH))
 
@@ -415,7 +420,12 @@ if not token:
     error('No Dropbox OAuth 2 token')
 
 LOG_PATH = realpath(LOG_PATH)
-log_file = os.path.join(LOG_PATH, time.strftime('%Y-%m-%dT%H-%M-%S%z.log'))
+log_file_name = '%Y-%m-%dT%H-%M-%S%z.log'
+if sys.platform == 'win32':
+    log_file_name = datetime.now(tz.tzlocal()).strftime(log_file_name)
+else:
+    log_file_name = time.strftime(log_file_name)
+log_file = os.path.join(LOG_PATH, log_file_name)
 if os.path.isdir(LOG_PATH):
     if os.path.isfile(log_file):
         os.utime(log_file, None)
