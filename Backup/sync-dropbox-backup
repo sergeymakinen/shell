@@ -6,16 +6,15 @@ from __future__ import print_function, unicode_literals
 # Parameters
 #
 
-
 DROPBOX_PATH = '/Test'
 
-LOCAL_PATH = '~/Library/Application Support/Google'
+LOCAL_PATH = r'~/Library/Application Support/Google'
 
-CACHE_PATH = '~/Library/Caches/com.sergeyreznikov.SyncDropboxBackup'
+CACHE_PATH = r'~/Library/Caches/com.sergeyreznikov.SyncDropboxBackup'
 
-LOG_PATH = '~/Library/Logs/com.sergeyreznikov.SyncDropboxBackup'
+LOG_PATH = r'~/Library/Logs/com.sergeyreznikov.SyncDropboxBackup'
 
-TOKEN_FILE_PATH = '/etc/sync-dropbox-backup'
+TOKEN_FILE_PATH = r'/etc/sync-dropbox-backup'
 
 DROPBOX_PUT_SIZE_LIMIT = 64 * 1024 * 1024
 
