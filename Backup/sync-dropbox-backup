@@ -370,9 +370,9 @@ def decode_keychain_password(hex):
     return password
 
 
-def error(message):
-    print(message)
-    sys.exit(1)
+def error(message, code=1):
+    print(message, file=sys.stderr)
+    sys.exit(code)
 
 
 def format_size(size):
@@ -398,11 +398,11 @@ def get_token():
             return string_password
 
 
-def log(file_path, message):
-    if os.path.isfile(file_path):
-        log_file_obj = open(file_path, 'a')
-        log_file_obj.write(message + '\n')
-        log_file_obj.close()
+def log(path, message):
+    if os.path.isfile(path):
+        file_obj = open(path, 'a')
+        file_obj.write(message + '\n')
+        file_obj.close()
 
 
 def realpath(path):
