@@ -1,93 +1,309 @@
-#!/bin/bash
+#!/usr/bin/python
+
+from __future__ import print_function, unicode_literals
 
 #
 # Parameters
 #
 
-LOSSLESS_PATH="/Volumes/Archive/Audio/Music"
+LOSSLESS_PATH = r'/Volumes/Archive/Audio/Music'
 
-LOSSY_PATH="~/Lossy Music"
+LOSSY_PATH = r'~/Lossy Music'
 
-LOG_PATH="~/Library/Logs/com.sergeyreznikov.SyncLossyLibrary"
+LOG_PATH = r'~/Library/Logs/com.sergeyreznikov.SyncLossyLibrary'
+
+EXTENSIONS = [
+    'mp3',
+    ('m4a', 'ALAC')
+]
+
+ENCODE_COMMAND = r'/Applications/XLD.app/Contents/MacOS/XLD --cmdline --profile Lossy -o :lossy_file_path :lossless_file_path'
+
+MEDIAINFO_FILE_PATH = r'mediainfo'
 
 #
-# Requires MediaInfo, XLD
+# Requires python-dateutil (only on Windows),
+# MediaInfo and some CLI encoder (both only if SYNC_EXTENSIONS specifies a format)
 #
 
-function equal_left_right {
-	if [ ! -f "$1" ] || [ ! -f "$2" ]; then
-		return 1
-	fi
-	if [ "$(stat -f %z/%m "$1")" == "$(stat -f %z/%m "$2")" ]; then
-		return 0
-	else
-		return 1
-	fi
-}
+import os
+import posixpath
+import shlex
+import shutil
+import subprocess
+import sys
+from distutils.spawn import find_executable
+if sys.platform == 'win32':
+    from datetime import datetime
+    from dateutil import tz
+else:
+    import time
 
-function log {
-	if [ -f "$1" ]; then
-		echo "$2" >> "$1"
-	fi
-}
 
-function realpath {
-	python -c "import os, sys; print os.path.realpath(os.path.expanduser(sys.argv[1]));" "$1"
-}
+class ComplexError(Exception):
+    def __init__(self, caller, exception):
+        self.caller = caller
+        self.inner_exception = exception
 
-function requires_encoding {
-	if [ "${1: -4}" == ".m4a" ] && [ $(mediainfo '--Inform=Audio;%Format%' "$1") == "ALAC" ]; then
-		return 0
-	else
-		return 1
-	fi
-}
+    def __str__(self):
+        return str(self.inner_exception)
 
-function xld {
-	/Applications/XLD.app/Contents/MacOS/XLD --cmdline "$@"
-}
 
-LOSSLESS_PATH=$(realpath "$LOSSLESS_PATH")
-if [ ! -d "$LOSSLESS_PATH" ]; then
-	echo "No lossless directory '$LOSSLESS_PATH'"
-	exit 1
-fi
-LOSSLESS_PATH_LENGTH=${#LOSSLESS_PATH}
-LOSSY_PATH=$(realpath "$LOSSY_PATH")
-if [ ! -d "$LOSSY_PATH" ]; then
-	echo "No lossy directory '$LOSSY_PATH'"
-	exit 1
-fi
-LOSSY_PATH_LENGTH=${#LOSSY_PATH}
-LOG_PATH=$(realpath "$LOG_PATH")
-LOG_FILE="$LOG_PATH/$(date +'%Y-%m-%dT%H-%M-%S%z').log"
-if [ -d "$LOG_PATH" ]; then
-	touch "$LOG_FILE"
-fi
+class SyncClient(object):
+    @staticmethod
+    def _copy_times(lossless_path, lossy_path):
+        try:
+            accesssed = os.path.getatime(lossless_path)
+        except OSError as e:
+            raise ComplexError('os.path.getatime', e)
 
-# Added/updated
-while IFS= read -r -d '' lossless_file; do
-	lossless_substring=${lossless_file:$LOSSLESS_PATH_LENGTH}
-	if ! equal_left_right "$lossless_file" "$LOSSY_PATH$lossless_substring"; then
-		mkdir -p "$(dirname "$LOSSY_PATH$lossless_substring")"
-		if requires_encoding "$lossless_file"; then
-			xld --profile Lossy -o "$LOSSY_PATH$lossless_substring" "$lossless_file"
-			log "$LOG_FILE" "Encoded '$lossless_substring'"
-		else
-			cp "$lossless_file" "$LOSSY_PATH$lossless_substring"
-			log "$LOG_FILE" "Copied '$lossless_substring'"
-		fi
-		if [ -f "$LOSSY_PATH$lossless_substring" ]; then
-			touch -r "$lossless_file" "$LOSSY_PATH$lossless_substring"
-		fi
-	fi
-done < <(find "$LOSSLESS_PATH" -type f \( -name '*.m4a' -or -name '*.mp3' \) -print0)
+        try:
+            modified = os.path.getmtime(lossless_path)
+        except OSError as e:
+            raise ComplexError('os.path.getmtime', e)
 
-# Removed
-while IFS= read -r -d '' lossy; do
-	lossy_substring=${lossy:$LOSSY_PATH_LENGTH}
-	if ( [ -d "$lossy" ] && [ ! -d "$LOSSLESS_PATH$lossy_substring" ] ) || ( [ -f "$lossy" ] && [ ! -f "$LOSSLESS_PATH$lossy_substring" ] ); then
-		rm -drf "$lossy"
-		log "$LOG_FILE" "Removed '$lossy_substring'"
-	fi
-done < <(find "$LOSSY_PATH" -print0)
+        try:
+            os.utime(lossy_path, (accesssed, modified))
+        except OSError as e:
+            raise ComplexError('os.utime', e)
+
+    def __init__(self, lossless_path, lossy_path, extensions, encode_cmd, mediainfo_file_path, logger=None):
+        self._lossless_path = lossless_path
+        self._lossy_path = lossy_path
+        self._exts = tuple(['.' + (ext[0] if isinstance(ext, tuple) else ext).lower() for ext in extensions])
+        self._encode_cmd = encode_cmd
+        self._mi_file_path = mediainfo_file_path
+        self._formats = {'.' + ext[0].lower(): ext[1] for ext in extensions if isinstance(ext, tuple)}
+        self._logger = logger
+
+    def sync(self):
+        self._clean()
+        self._sync()
+
+    def _log(self, message):
+        if self._logger:
+            self._logger(message)
+
+    def _log_exception(self, operation, path, caller, exception):
+        if isinstance(exception, (OSError, IOError)):
+            message = "code = {0}, message = '{1}'".format(exception.errno, exception.strerror)
+        elif isinstance(exception, subprocess.CalledProcessError):
+            message = "code = {0}, command = '{1}'".format(exception.returncode, exception.cmd)
+        else:
+            message = str(exception)
+
+        self._log("Skipped {0} '{1}': {2}() raised {3}: {4}".format(operation, path,
+                                                                    caller, type(exception).__name__, message))
+
+    def _log_clean_exception(self, path, caller, exception):
+        self._log_exception('cleaning', path, caller, exception)
+
+    def _log_sync_exception(self, path, caller, exception):
+        self._log_exception('syncing', path, caller, exception)
+
+    def _clean(self, rel_path='/'):
+        lossy_path = self._lossy_path
+        lossless_path = self._lossless_path
+        if rel_path != '/':
+            norm_rel_path = os.path.normpath(rel_path.lstrip('/'))
+            lossy_path = os.path.join(lossy_path, norm_rel_path)
+            lossless_path = os.path.join(lossless_path, norm_rel_path)
+        if not os.path.isdir(lossless_path):
+            try:
+                shutil.rmtree(lossy_path)
+            except OSError as e:
+                self._log_clean_exception(rel_path, 'shutil.rmtree', e)
+                return
+
+            self._log("Removed '{0}'".format(rel_path))
+            return
+
+        try:
+            entries = os.listdir(lossy_path)
+        except OSError as e:
+            self._log_clean_exception(rel_path, 'os.listdir', e)
+            return
+
+        for entry in entries:
+            rel_entry_path = posixpath.join(rel_path, entry)
+            entry_lossy_path = os.path.join(lossy_path, entry)
+            entry_lossless_path = os.path.join(lossless_path, entry)
+
+            if os.path.isdir(entry_lossy_path):
+                self._clean(rel_entry_path)
+            else:
+                if not os.path.isfile(entry_lossless_path):
+                    try:
+                        os.unlink(entry_lossy_path)
+                    except OSError as e:
+                        self._log_clean_exception(rel_entry_path, 'os.unlink', e)
+                        continue
+
+                    self._log("Removed '{0}'".format(rel_entry_path))
+
+    def _compare_files(self, lossless_path, lossy_path):
+        def requires_encoding(path, ext, formats):
+            if ext not in formats:
+                return False
+
+            try:
+                file_format = subprocess.Popen([self._mi_file_path, '--Inform=Audio;%Format%', path],
+                                               stdout=subprocess.PIPE).communicate()[0].rstrip()
+            except OSError as e:
+                raise ComplexError('subprocess.Popen', e)
+
+            if file_format == formats[ext]:
+                return True
+            else:
+                return False
+
+        ext = os.path.splitext(lossless_path)[1].lower()
+        if not os.path.isfile(lossy_path):
+            return False, requires_encoding(lossless_path, ext, self._formats)
+
+        try:
+            lossless_modified = os.path.getmtime(lossless_path)
+            lossy_modified = os.path.getmtime(lossy_path)
+        except OSError as e:
+            raise ComplexError('os.path.getmtime', e)
+
+        if lossless_modified != lossy_modified:
+            return False, requires_encoding(lossless_path, ext, self._formats)
+
+        if ext in self._formats:
+            return True, requires_encoding(lossless_path, ext, self._formats)
+        else:
+            try:
+                lossless_size = os.path.getsize(lossless_path)
+                lossy_size = os.path.getsize(lossy_path)
+            except OSError as e:
+                raise ComplexError('os.path.getsize', e)
+
+            if lossless_size == lossy_size:
+                return True, False
+            else:
+                return False, False
+
+    def _sync(self, rel_path='/'):
+        lossless_path = self._lossless_path
+        lossy_path = self._lossy_path
+
+        if rel_path != '/':
+            norm_rel_path = os.path.normpath(rel_path.lstrip('/'))
+            lossless_path = os.path.join(lossless_path, norm_rel_path)
+            lossy_path = os.path.join(lossy_path, norm_rel_path)
+
+        try:
+            entries = os.listdir(lossless_path)
+        except OSError as e:
+            self._log_sync_exception(rel_path, 'os.listdir', e)
+            return
+
+        for entry in entries:
+            rel_entry_path = posixpath.join(rel_path, entry)
+            entry_lossless_path = os.path.join(lossless_path, entry)
+            entry_lossy_path = os.path.join(lossy_path, entry)
+
+            if os.path.isdir(entry_lossless_path):
+                self._sync(rel_entry_path)
+            else:
+                if not entry.lower().endswith(self._exts):
+                    continue
+
+                try:
+                    intact, requires_encoding = self._compare_files(entry_lossless_path, entry_lossy_path)
+                except ComplexError as e:
+                    self._log_sync_exception(rel_entry_path,
+                                             e.caller + '() in SyncClient._compare_files', e.inner_exception)
+                    continue
+
+                if not intact:
+                    if not os.path.isdir(lossy_path):
+                        try:
+                            os.makedirs(lossy_path)
+                        except OSError as e:
+                            self._log_sync_exception(rel_entry_path, 'os.makedirs', e)
+                            continue
+
+                    if requires_encoding:
+                        cmd = []
+                        for arg in self._encode_cmd:
+                            if arg == ':lossless_file_path':
+                                cmd.append(entry_lossless_path)
+                            elif arg == ':lossy_file_path':
+                                cmd.append(entry_lossy_path)
+                            else:
+                                cmd.append(arg)
+                        try:
+                            subprocess.check_call(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        except (OSError, subprocess.CalledProcessError, IndexError) as e:
+                            self._log_exception('encoding', rel_entry_path, 'subprocess.check_call', e)
+                            continue
+
+                        self._log("Encoded '{0}'".format(rel_entry_path))
+                    else:
+                        try:
+                            shutil.copyfile(entry_lossless_path, entry_lossy_path)
+                        except (IOError, shutil.Error) as e:
+                            self._log_exception('copying', rel_entry_path, 'shutil.copyfile', e)
+                            continue
+
+                        self._log("Copied '{0}'".format(rel_entry_path))
+                    try:
+                        SyncClient._copy_times(entry_lossless_path, entry_lossy_path)
+                    except ComplexError as e:
+                        self._log_exception('copying times for', rel_entry_path,
+                                            e.caller + '() in SyncClient._copy_times', e.inner_exception)
+
+
+def error(message, code=1):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+def log(path, message):
+    if os.path.isfile(path):
+        file_obj = open(path, 'a')
+        file_obj.write(message + '\n')
+        file_obj.close()
+
+
+def realpath(path, executable=False):
+    if executable:
+        full_path = find_executable(path)
+        if full_path is not None:
+            return os.path.realpath(full_path)
+    else:
+        return os.path.realpath(os.path.expandvars(os.path.expanduser(path)))
+
+
+LOSSLESS_PATH = realpath(LOSSLESS_PATH)
+if not os.path.isdir(LOSSLESS_PATH):
+    error("No lossless directory '{0}'".format(LOSSLESS_PATH))
+
+LOSSY_PATH = realpath(LOSSY_PATH)
+if not os.path.isdir(LOSSY_PATH):
+    error("No lossy directory '{0}'".format(LOSSY_PATH))
+
+encode_cmd = shlex.split(ENCODE_COMMAND)
+if len(encode_cmd) > 0:
+    encode_cmd[0] = realpath(encode_cmd[0], True)
+MEDIAINFO_FILE_PATH = realpath(MEDIAINFO_FILE_PATH, True)
+
+LOG_PATH = realpath(LOG_PATH)
+log_file_name = '%Y-%m-%dT%H-%M-%S%z.log'
+if sys.platform == 'win32':
+    log_file_name = datetime.now(tz.tzlocal()).strftime(log_file_name)
+else:
+    log_file_name = time.strftime(log_file_name)
+log_file = os.path.join(LOG_PATH, log_file_name)
+if os.path.isdir(LOG_PATH):
+    if os.path.isfile(log_file):
+        os.utime(log_file, None)
+    else:
+        open(log_file, 'a').close()
+
+sync_client = SyncClient(LOSSLESS_PATH, LOSSY_PATH,
+                         EXTENSIONS, encode_cmd, MEDIAINFO_FILE_PATH,
+                         logger=lambda message: log(log_file, message))
+sync_client.sync()
