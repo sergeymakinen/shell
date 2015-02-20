@@ -273,8 +273,8 @@ def realpath(path, executable=False):
         full_path = find_executable(path)
         if full_path is not None:
             return os.path.realpath(full_path)
-    else:
-        return os.path.realpath(os.path.expandvars(os.path.expanduser(path)))
+
+    return os.path.realpath(os.path.expandvars(os.path.expanduser(path)))
 
 
 LOSSLESS_PATH = realpath(LOSSLESS_PATH)
