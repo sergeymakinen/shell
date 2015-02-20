@@ -142,24 +142,19 @@ class SyncClient(object):
                     self._log("Removed '{0}'".format(rel_entry_path))
 
     def _compare_files(self, lossless_path, lossy_path):
-        def requires_encoding(path, ext, formats):
-            if ext not in formats:
+        def requires_encoding():
+            ext = os.path.splitext(lossless_path)[1].lower()
+            if ext not in self._formats:
                 return False
 
             try:
-                file_format = subprocess.Popen([self._mi_file_path, '--Inform=Audio;%Format%', path],
-                                               stdout=subprocess.PIPE).communicate()[0].rstrip()
+                return subprocess.Popen([self._mi_file_path, '--Inform=Audio;%Format%', lossless_path],
+                                        stdout=subprocess.PIPE).communicate()[0].rstrip() == self._formats[ext]
             except OSError as e:
                 raise ComplexError('subprocess.Popen', e)
 
-            if file_format == formats[ext]:
-                return True
-            else:
-                return False
-
-        ext = os.path.splitext(lossless_path)[1].lower()
         if not os.path.isfile(lossy_path):
-            return False, requires_encoding(lossless_path, ext, self._formats)
+            return False, requires_encoding()
 
         try:
             lossless_modified = os.path.getmtime(lossless_path)
@@ -168,10 +163,10 @@ class SyncClient(object):
             raise ComplexError('os.path.getmtime', e)
 
         if lossless_modified != lossy_modified:
-            return False, requires_encoding(lossless_path, ext, self._formats)
+            return False, requires_encoding()
 
-        if ext in self._formats:
-            return True, requires_encoding(lossless_path, ext, self._formats)
+        if requires_encoding():
+            return True, True
         else:
             try:
                 lossless_size = os.path.getsize(lossless_path)
@@ -179,10 +174,7 @@ class SyncClient(object):
             except OSError as e:
                 raise ComplexError('os.path.getsize', e)
 
-            if lossless_size == lossy_size:
-                return True, False
-            else:
-                return False, False
+            return lossless_size == lossy_size, False
 
     def _sync(self, rel_path='/'):
         lossless_path = self._lossless_path
