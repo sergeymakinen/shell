@@ -38,8 +38,8 @@ from sqlite3 import connect
 
 
 class MaxRetryError(Exception):
-    def __init__(self, inner_exception):
-        self.inner_exception = inner_exception
+    def __init__(self, exception):
+        self.inner_exception = exception
 
     def __str__(self):
         return str(self.inner_exception)
