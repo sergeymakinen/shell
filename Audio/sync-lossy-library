@@ -33,7 +33,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-from distutils.spawn import find_executable
 if sys.platform == 'win32':
     from datetime import datetime
     from dateutil import tz
@@ -143,7 +142,7 @@ class SyncClient(object):
                     self._log("Removed '{0}'".format(rel_entry_path))
 
     def _compare_files(self, lossless_path, lossy_path):
-        def requires_encoding():
+        def _requires_encoding():
             ext = os.path.splitext(lossless_path)[1].lower()
             if ext not in self._formats:
                 return False
@@ -155,7 +154,7 @@ class SyncClient(object):
                 raise ComplexError('subprocess.Popen', e)
 
         if not os.path.isfile(lossy_path):
-            return False, requires_encoding()
+            return False, _requires_encoding()
 
         try:
             lossless_modified = os.path.getmtime(lossless_path)
@@ -164,9 +163,9 @@ class SyncClient(object):
             raise ComplexError('os.path.getmtime', e)
 
         if lossless_modified != lossy_modified:
-            return False, requires_encoding()
+            return False, _requires_encoding()
 
-        if requires_encoding():
+        if _requires_encoding():
             return True, True
         else:
             try:
@@ -261,11 +260,27 @@ def log(path, message):
         file_obj.close()
 
 
-def realpath(path, executable=False):
-    if executable:
-        full_path = find_executable(path)
-        if full_path is not None:
-            return os.path.realpath(full_path)
+def realpath(path, find_executable=False):
+    def _find_executable():
+        pathes = os.environ.get('PATH', os.defpath).split(os.pathsep)
+        names = [path]
+        if sys.platform == 'win32':
+            if os.curdir not in pathes:
+                pathes.insert(0, os.curdir)
+            names += [path + ext for ext in ['.com', '.exe', '.bat', '.cmd']]
+        for env_path in pathes:
+            for name in names:
+                probe_path = os.path.join(env_path, name)
+                if os.path.isfile(probe_path):
+                    return probe_path
+
+    if find_executable:
+        if os.path.isfile(path):
+            return os.path.realpath(path)
+        
+        exec_path = _find_executable()
+        if exec_path is not None:
+            return os.path.realpath(exec_path)
 
     return os.path.realpath(os.path.expandvars(os.path.expanduser(path)))
 
