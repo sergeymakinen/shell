@@ -22,19 +22,20 @@ DROPBOX_PUT_SIZE_LIMIT = 64 * 1024 * 1024
 # Requires dropbox, python-dateutil (only on Windows)
 #
 
+import codecs
 import os
 import posixpath
 import re
 import subprocess
 import sys
+from dropbox.client import DropboxClient
+from dropbox.rest import ErrorResponse
+from sqlite3 import connect
 if sys.platform == 'win32':
     from datetime import datetime
     from dateutil import tz
 else:
     import time
-from dropbox.client import DropboxClient
-from dropbox.rest import ErrorResponse
-from sqlite3 import connect
 
 
 class MaxRetryError(Exception):
@@ -400,7 +401,7 @@ def get_token():
 
 def log(path, message):
     if os.path.isfile(path):
-        file_obj = open(path, 'a')
+        file_obj = codecs.open(path, 'a', 'utf8')
         file_obj.write(message + '\n')
         file_obj.close()
 

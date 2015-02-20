@@ -26,6 +26,7 @@ MEDIAINFO_FILE_PATH = r'mediainfo'
 # MediaInfo and some CLI encoder (both only if SYNC_EXTENSIONS specifies a format)
 #
 
+import codecs
 import os
 import posixpath
 import shlex
@@ -255,7 +256,7 @@ def error(message, code=1):
 
 def log(path, message):
     if os.path.isfile(path):
-        file_obj = open(path, 'a')
+        file_obj = codecs.open(path, 'a', 'utf8')
         file_obj.write(message + '\n')
         file_obj.close()
 
