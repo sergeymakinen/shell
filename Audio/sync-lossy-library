@@ -265,9 +265,12 @@ def realpath(path, find_executable=False):
         pathes = os.environ.get('PATH', os.defpath).split(os.pathsep)
         names = [path]
         if sys.platform == 'win32':
+            exts = ['.com', '.exe', '.bat', '.cmd']
             if os.curdir not in pathes:
                 pathes.insert(0, os.curdir)
-            names += [path + ext for ext in ['.com', '.exe', '.bat', '.cmd']]
+            if os.path.splitext(path)[1].lower() not in exts:
+                names = []
+            names += [path + ext for ext in exts]
         for env_path in pathes:
             for name in names:
                 probe_path = os.path.join(env_path, name)
