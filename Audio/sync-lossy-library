@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 from __future__ import print_function, unicode_literals
 
@@ -22,22 +22,15 @@ ENCODE_COMMAND = r'/Applications/XLD.app/Contents/MacOS/XLD --cmdline --profile 
 MEDIAINFO_FILE_PATH = r'mediainfo'
 
 #
-# Requires python-dateutil (only on Windows),
-# MediaInfo and some CLI encoder (both only if SYNC_EXTENSIONS specifies a format)
+#
 #
 
-import codecs
 import os
 import posixpath
 import shlex
 import shutil
 import subprocess
-import sys
-if sys.platform == 'win32':
-    from datetime import datetime
-    from dateutil import tz
-else:
-    import time
+from sergeyreznikov import shell_utils
 
 
 class ComplexError(Exception):
@@ -248,73 +241,25 @@ class SyncClient(object):
                                             e.caller + '() in SyncClient._copy_times', e.inner_exception)
 
 
-def error(message, code=1):
-    print(message, file=sys.stderr)
-    sys.exit(code)
-
-
-def log(path, message):
-    if os.path.isfile(path):
-        file_obj = codecs.open(path, 'a', 'utf8')
-        file_obj.write(message + '\n')
-        file_obj.close()
-
-
-def realpath(path, find_executable=False):
-    def _find_executable():
-        pathes = os.environ.get('PATH', os.defpath).split(os.pathsep)
-        names = [path]
-        if sys.platform == 'win32':
-            exts = ['.com', '.exe', '.bat', '.cmd']
-            if os.curdir not in pathes:
-                pathes.insert(0, os.curdir)
-            if os.path.splitext(path)[1].lower() not in exts:
-                names = []
-            names += [path + ext for ext in exts]
-        for env_path in pathes:
-            for name in names:
-                probe_path = os.path.join(env_path, name)
-                if os.path.isfile(probe_path):
-                    return probe_path
-
-    if find_executable:
-        if os.path.isfile(path):
-            return os.path.realpath(path)
-        
-        exec_path = _find_executable()
-        if exec_path is not None:
-            return os.path.realpath(exec_path)
-
-    return os.path.realpath(os.path.expandvars(os.path.expanduser(path)))
-
-
-LOSSLESS_PATH = realpath(LOSSLESS_PATH)
+LOSSLESS_PATH = shell_utils.realpath(LOSSLESS_PATH)
 if not os.path.isdir(LOSSLESS_PATH):
-    error("No lossless directory '{0}'".format(LOSSLESS_PATH))
+    shell_utils.error("No lossless directory '{0}'".format(LOSSLESS_PATH))
 
-LOSSY_PATH = realpath(LOSSY_PATH)
+LOSSY_PATH = shell_utils.realpath(LOSSY_PATH)
 if not os.path.isdir(LOSSY_PATH):
-    error("No lossy directory '{0}'".format(LOSSY_PATH))
+    shell_utils.error("No lossy directory '{0}'".format(LOSSY_PATH))
 
 encode_cmd = shlex.split(ENCODE_COMMAND)
 if len(encode_cmd) > 0:
-    encode_cmd[0] = realpath(encode_cmd[0], True)
-MEDIAINFO_FILE_PATH = realpath(MEDIAINFO_FILE_PATH, True)
+    encode_cmd[0] = shell_utils.realpath(encode_cmd[0], True)
+MEDIAINFO_FILE_PATH = shell_utils.realpath(MEDIAINFO_FILE_PATH, True)
 
-LOG_PATH = realpath(LOG_PATH)
-log_file_name = '%Y-%m-%dT%H-%M-%S%z.log'
-if sys.platform == 'win32':
-    log_file_name = datetime.now(tz.tzlocal()).strftime(log_file_name)
-else:
-    log_file_name = time.strftime(log_file_name)
-log_file = os.path.join(LOG_PATH, log_file_name)
+LOG_PATH = shell_utils.realpath(LOG_PATH)
+log_file = os.path.join(LOG_PATH, shell_utils.strftime('%Y-%m-%dT%H-%M-%S%z.log'))
 if os.path.isdir(LOG_PATH):
-    if os.path.isfile(log_file):
-        os.utime(log_file, None)
-    else:
-        open(log_file, 'a').close()
+    shell_utils.touch(log_file)
 
 sync_client = SyncClient(LOSSLESS_PATH, LOSSY_PATH,
                          EXTENSIONS, encode_cmd, MEDIAINFO_FILE_PATH,
-                         logger=lambda message: log(log_file, message))
+                         logger=lambda message: shell_utils.log(log_file, message))
 sync_client.sync()

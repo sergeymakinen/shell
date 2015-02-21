@@ -7,8 +7,9 @@
 **Requires**:
 
 * OS X, Linux or Windows
-* Python (tested on 2.7) with a module:
-    * python-dateutil (only on Windows)
+* Python (tested on 2.7) with the following modules:
+    * python-dateutil
+    * [sergeyreznikov](https://github.com/sergeyreznikov/python-modules)
 * MediaInfo (only if encoding is needed) at ```MEDIAINFO_FILE_PATH```
 * Command-line encoder (only if encoding is needed) that is callable as ```ENCODE_COMMAND```. ```ENCODE_COMMAND``` can contain two self-explainable substitutions:
     * ```:lossless_file_path```
@@ -35,12 +36,13 @@ Removes “dead” files from the iTunes library. Then adds \*.mp3 and \*.m4a fi
 * OS X, Linux or Windows
 * Python (tested on 2.7) with the following modules:
     * dropbox
-    * python-dateutil (only on Windows)
+    * python-dateutil
+    * [sergeyreznikov](https://github.com/sergeyreznikov/python-modules)
 
 Uploads files (preserving directories) from ```LOCAL_PATH``` to ```DROPBOX_PATH``` at Dropbox (if they don't already exist or their size/time modified/Dropbox revision changed) and removes files from ```LOCAL_PATH``` that don't exist in ```DROPBOX_PATH``` at Dropbox.
 
 Maintains its state in a SQLite 3 database placed in ```CACHE_PATH```. On OS X it reads a Dropbox OAuth 2 token from a system Keychain, on non-OS X systems it reads the token from a file at ```TOKEN_FILE_PATH``` with the following format:
 
-```ini
+```python
 TOKEN="dropbox-oauth-token"
 ```
