@@ -365,7 +365,7 @@ CACHE_PATH = shell_utils.realpath(CACHE_PATH)
 if sys.platform == 'darwin':
     if not os.path.isdir(CACHE_PATH):
         os.mkdir(CACHE_PATH)
-    token = shell_utils.get_keychain_password('sync-dropbox-backup')
+    token = shell_utils.get_keychain_password('sync-dropbox-backup', 'token')
 else:
     if not os.path.isdir(CACHE_PATH):
         shell_utils.error("No cache directory '{0}'".format(CACHE_PATH))
