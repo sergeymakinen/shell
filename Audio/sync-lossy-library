@@ -46,17 +46,12 @@ class SyncClient(object):
     @staticmethod
     def _copy_times(lossless_path, lossy_path):
         try:
-            accesssed = os.path.getatime(lossless_path)
+            stat = os.stat(lossless_path)
         except OSError as e:
-            raise ComplexError('os.path.getatime', e)
+            raise ComplexError('os.stat', e)
 
         try:
-            modified = os.path.getmtime(lossless_path)
-        except OSError as e:
-            raise ComplexError('os.path.getmtime', e)
-
-        try:
-            os.utime(lossy_path, (accesssed, modified))
+            os.utime(lossy_path, (stat.st_atime, stat.st_mtime))
         except OSError as e:
             raise ComplexError('os.utime', e)
 

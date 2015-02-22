@@ -311,19 +311,13 @@ class DropboxSyncClient(object):
                 self._upload(rel_entry_path)
             else:
                 try:
-                    entry_modified = os.path.getmtime(entry_local_path)
+                    entry_stat = os.stat(entry_local_path)
                 except OSError as e:
-                    self._log_upload_exception(rel_entry_path, 'os.path.getmtime', e)
-                    continue
-
-                try:
-                    entry_size = os.path.getsize(entry_local_path)
-                except OSError as e:
-                    self._log_upload_exception(rel_entry_path, 'os.path.getsize', e)
+                    self._log_upload_exception(rel_entry_path, 'os.stat', e)
                     continue
 
                 entry_metadata = self._get_metadata(entry_path)
-                if self._find_file_state(entry_local_path, entry_modified, entry_size, entry_metadata):
+                if self._find_file_state(entry_local_path, entry_stat.st_mtime, entry_stat.st_size, entry_metadata):
                     continue
 
                 try:
@@ -334,12 +328,12 @@ class DropboxSyncClient(object):
 
                 caller = None
                 try:
-                    if entry_size <= self._put_size_limit:
+                    if entry_stat.st_size <= self._put_size_limit:
                         caller = 'DropboxClient.put_file'
                         entry_metadata = self._dropbox_upload(entry_path, entry_file_obj)
                     else:
                         caller = 'ChunkedUploader.upload_chunked'
-                        uploader = self._dropbox_upload_chunks(entry_file_obj, entry_size)
+                        uploader = self._dropbox_upload_chunks(entry_file_obj, entry_stat.st_size)
                         caller = 'ChunkedUploader.finish'
                         entry_metadata = self._dropbox_upload_chunked(uploader, entry_path)
                 except (MaxRetryError, ErrorResponse) as e:
@@ -348,8 +342,8 @@ class DropboxSyncClient(object):
                 finally:
                     entry_file_obj.close()
 
-                self._set_file_state(entry_local_path, entry_modified, entry_size, entry_metadata)
-                self._stats['uploaded_bytes'] += entry_size
+                self._set_file_state(entry_local_path, entry_stat.st_mtime, entry_stat.st_size, entry_metadata)
+                self._stats['uploaded_bytes'] += entry_stat.st_size
                 self._log("Uploaded '{0}'".format(rel_entry_path))
 
     def _clean_dbs(self):
