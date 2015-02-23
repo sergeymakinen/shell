@@ -259,7 +259,7 @@ class DropboxSyncClient(object):
         self._state_connection = self._state_db.cursor()
         self._state_connection.execute('''
         CREATE TABLE IF NOT EXISTS `files`(
-            `file_path` TEXT PRIMARY KEY,
+            `path` TEXT PRIMARY KEY,
             `modified` INTEGER,
             `size` INTEGER,
             `revision` TEXT
@@ -272,7 +272,7 @@ class DropboxSyncClient(object):
 
         return bool(self._state_connection.execute('''
         SELECT COUNT(*) FROM `files` WHERE
-            `file_path` = ?
+            `path` = ?
             AND `modified` = ?
             AND `size` = ?
             AND `revision` = ?
@@ -317,7 +317,7 @@ class DropboxSyncClient(object):
                     continue
 
                 entry_metadata = self._get_metadata(entry_path)
-                if self._find_file_state(entry_local_path, entry_stat.st_mtime, entry_stat.st_size, entry_metadata):
+                if self._find_file_state(rel_entry_path, entry_stat.st_mtime, entry_stat.st_size, entry_metadata):
                     continue
 
                 try:
@@ -342,7 +342,7 @@ class DropboxSyncClient(object):
                 finally:
                     entry_file_obj.close()
 
-                self._set_file_state(entry_local_path, entry_stat.st_mtime, entry_stat.st_size, entry_metadata)
+                self._set_file_state(rel_entry_path, entry_stat.st_mtime, entry_stat.st_size, entry_metadata)
                 self._stats['uploaded_bytes'] += entry_stat.st_size
                 self._log("Uploaded '{0}'".format(rel_entry_path))
 
