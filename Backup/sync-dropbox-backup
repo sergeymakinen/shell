@@ -18,6 +18,8 @@ TOKEN_FILE_PATH = r'/etc/sync-dropbox-backup'
 
 DROPBOX_PUT_SIZE_LIMIT = 64 * 1024 * 1024
 
+UNMOUNT_CHECK_PATH = r''
+
 #
 #
 #
@@ -37,7 +39,19 @@ class MaxRetryError(Exception):
         self.inner_exception = exception
 
     def __str__(self):
-        return str(self.inner_exception)
+        return unicode(self.inner_exception)
+
+
+class UnmountError(Exception):
+    def __init__(self, path):
+        self.path = path
+
+    def __str__(self):
+        if self.path is None:
+            message = 'Custom callback failed'
+        else:
+            message = "os.path.exits() failed for '{0}'".format(self.path)
+        return message + ', possibly because of a local path unmount'
 
 
 class DropboxSyncClient(object):
@@ -66,7 +80,8 @@ class DropboxSyncClient(object):
 
 
     def __init__(self, token, path, local_path, cache_path,
-                 put_size_limit=64 * 1024 * 1024, chunk_size=16 * 1024 * 1024, max_retries=10, logger=None):
+                 put_size_limit=64 * 1024 * 1024, chunk_size=16 * 1024 * 1024, max_retries=10, logger=None,
+                 unmount_relative_path=None):
         self._client = DropboxClient(token, 'en_US')
         self._path = path
         self._local_path = local_path
@@ -75,6 +90,12 @@ class DropboxSyncClient(object):
         self._chunk_size = chunk_size
         self._max_retries = max_retries
         self._logger = logger
+        self._unmount_path = unmount_relative_path
+        if isinstance(self._unmount_path, unicode):
+            if self._unmount_path == '':
+                self._unmount_path = None
+            else:
+                self._unmount_path = os.path.join(self._local_path, self._unmount_path)
         self._stats = {
             'calls': 0,
             'errors': 0,
@@ -86,6 +107,8 @@ class DropboxSyncClient(object):
         self._init_state_db()
 
     def sync(self):
+        self._check_unmount_or_raise_error()
+
         for name in self._stats:
             self._stats[name] = 0
         try:
@@ -99,7 +122,7 @@ class DropboxSyncClient(object):
         return self._stats
 
     def _log(self, message):
-        if self._logger:
+        if hasattr(self._logger, '__call__'):
             self._logger(message)
 
     def _log_exception(self, operation, path, caller, exception):
@@ -115,7 +138,7 @@ class DropboxSyncClient(object):
         elif isinstance(e, (OSError, IOError)):
             message = "code = {0}, message = '{1}'".format(e.errno, e.strerror)
         else:
-            message = str(e)
+            message = unicode(e)
 
         self._log("{0} {1} '{2}': {3}() raised {4}: {5}".format(prefix, operation, path,
                                                                 caller, type(e).__name__, message))
@@ -158,6 +181,14 @@ class DropboxSyncClient(object):
 
     def _dropbox_upload_chunked(self, uploader, path):
         return self._dropbox_action(lambda: uploader.finish(path, True))
+
+    def _check_unmount_or_raise_error(self):
+        if isinstance(self._unmount_path, unicode):
+            if not os.path.exists(self._unmount_path):
+                raise UnmountError(self._unmount_path)
+        elif hasattr(self._unmount_path, '__call__'):
+            if not self._unmount_path():
+                raise UnmountError(None)
 
     def _init_cache_db(self):
         self._cache_db = connect(os.path.join(self._cache_path, 'cache.db'), isolation_level=None)
@@ -236,6 +267,8 @@ class DropboxSyncClient(object):
             if not metadata:
                 break
 
+            self._check_unmount_or_raise_error()
+
             local_path = os.path.join(self._local_path, os.path.normpath(metadata['path'][rel_path_len:]))
             if (metadata['is_dir'] and not os.path.isdir(local_path)) or (not metadata['is_dir'] and not os.path.isfile(local_path)):
                 self._enqueue_clean(metadata['path'], metadata['is_dir'])
@@ -288,6 +321,9 @@ class DropboxSyncClient(object):
         if rel_path != '/':
             path = posixpath.join(path, rel_path.lstrip('/'))
             local_path = os.path.join(local_path, os.path.normpath(rel_path.lstrip('/')))
+        else:
+            self._check_unmount_or_raise_error()
+
         metadata = self._get_metadata(path)
         if metadata and not metadata['is_dir']:
             self._log("Skipped uploading '{0}': a file with the similar path exists".format(rel_path))
@@ -381,11 +417,12 @@ if os.path.isdir(LOG_PATH):
     shell_utils.touch(log_file)
 
 sync_client = DropboxSyncClient(token, DROPBOX_PATH, LOCAL_PATH, CACHE_PATH,
-                                logger=lambda message: shell_utils.log(log_file, message))
+                                logger=lambda message: shell_utils.log(log_file, message),
+                                unmount_relative_path=UNMOUNT_CHECK_PATH)
 try:
     stats = sync_client.sync()
 except Exception as e:
-    shell_utils.log(log_file, 'Fatal exception {0} occured: {1}'.format(type(e).__name__, str(e)))
+    shell_utils.log(log_file, 'Fatal exception {0} occured: {1}'.format(type(e).__name__, unicode(e)))
     sys.exit(1)
 
 shell_utils.log(log_file, 'Sync finished, errors: {0}, retries: {1}, uploaded: {2}, Dropbox API calls: {3}'.format(stats['errors'],

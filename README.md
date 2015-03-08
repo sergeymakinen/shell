@@ -46,3 +46,5 @@ Maintains its state in a SQLite 3 database placed in ```CACHE_PATH```. On OS X i
 ```python
 TOKEN="dropbox-oauth-token"
 ```
+
+Optionally checks for a ```UNMOUNT_CHECK_PATH``` (relative to ```LOCAL_PATH```) existence if it's not empty and immediately stops if it's not found.
