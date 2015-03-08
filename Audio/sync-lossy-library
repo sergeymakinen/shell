@@ -39,7 +39,7 @@ class ComplexError(Exception):
         self.inner_exception = exception
 
     def __str__(self):
-        return str(self.inner_exception)
+        return unicode(self.inner_exception)
 
 
 class SyncClient(object):
@@ -78,7 +78,7 @@ class SyncClient(object):
         elif isinstance(exception, subprocess.CalledProcessError):
             message = "code = {0}, command = '{1}'".format(exception.returncode, exception.cmd)
         else:
-            message = str(exception)
+            message = unicode(exception)
 
         self._log("Skipped {0} '{1}': {2}() raised {3}: {4}".format(operation, path,
                                                                     caller, type(exception).__name__, message))
