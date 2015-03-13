@@ -380,7 +380,7 @@ class DropboxSyncClient(object):
 
                 self._set_file_state(rel_entry_path, entry_stat.st_mtime, entry_stat.st_size, entry_metadata)
                 self._stats['uploaded_bytes'] += entry_stat.st_size
-                self._log("Uploaded '{0}'".format(rel_entry_path))
+                self._log("Uploaded '{0}' ({1})".format(rel_entry_path, shell_utils.format_size(entry_stat.st_size)))
 
     def _clean_dbs(self):
         self._cache_connection.execute('DELETE FROM `metadata`').execute('VACUUM')
