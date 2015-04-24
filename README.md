@@ -39,7 +39,9 @@ Removes “dead” files from the iTunes library. Then adds \*.mp3 and \*.m4a fi
     * python-dateutil
     * [sergeyreznikov](https://github.com/sergeyreznikov/python-modules)
 
-Uploads files (preserving directories) from ```LOCAL_PATH``` to ```DROPBOX_PATH``` at Dropbox (if they don't already exist or their size/time modified/Dropbox revision changed) and removes files from ```LOCAL_PATH``` that don't exist in ```DROPBOX_PATH``` at Dropbox.
+Uploads files (preserving directories) from ```LOCAL_PATH``` to ```DROPBOX_PATH``` at Dropbox (if they don't already exist or their size/time modified/Dropbox revision changed) and removes files from ```DROPBOX_PATH``` at Dropbox that don't exist in ```LOCAL_PATH```.
+
+Basically, it's a one-way sync “local files to Dropbox”.
 
 Maintains its state in a SQLite 3 database placed in ```CACHE_PATH```. On OS X it reads a Dropbox OAuth 2 token from a system Keychain, on non-OS X systems it reads the token from a file at ```TOKEN_FILE_PATH``` with the following format:
 
@@ -47,4 +49,4 @@ Maintains its state in a SQLite 3 database placed in ```CACHE_PATH```. On OS X i
 TOKEN="dropbox-oauth-token"
 ```
 
-Optionally checks for a ```UNMOUNT_CHECK_PATH``` (relative to ```LOCAL_PATH```) existence if it's not empty and immediately stops if it's not found.
+Optionally checks for a ```UNMOUNT_CHECK_PATH``` (relative to ```LOCAL_PATH```) existence (if ```UNMOUNT_CHECK_PATH``` is not empty) and immediately stops if it's not found.
