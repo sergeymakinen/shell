@@ -1,6 +1,4 @@
-#!/usr/bin/env python
-
-from __future__ import print_function, unicode_literals
+#!/usr/bin/env pypy3
 
 #
 # Parameters
@@ -30,7 +28,8 @@ import posixpath
 import shlex
 import shutil
 import subprocess
-from sergeyreznikov import shell_utils
+
+from sergeymakinen import shell_utils
 
 
 class ComplexError(Exception):
@@ -39,7 +38,7 @@ class ComplexError(Exception):
         self.inner_exception = exception
 
     def __str__(self):
-        return unicode(self.inner_exception)
+        return str(self.inner_exception)
 
 
 class SyncClient(object):
@@ -69,7 +68,7 @@ class SyncClient(object):
         self._sync()
 
     def _log(self, message):
-        if self._logger:
+        if callable(self._logger):
             self._logger(message)
 
     def _log_exception(self, operation, path, caller, exception):
@@ -78,7 +77,7 @@ class SyncClient(object):
         elif isinstance(exception, subprocess.CalledProcessError):
             message = "code = {0}, command = '{1}'".format(exception.returncode, exception.cmd)
         else:
-            message = unicode(exception)
+            message = str(exception)
 
         self._log("Skipped {0} '{1}': {2}() raised {3}: {4}".format(operation, path,
                                                                     caller, type(exception).__name__, message))
@@ -235,26 +234,28 @@ class SyncClient(object):
                         self._log_exception('copying times for', rel_entry_path,
                                             e.caller + '() in SyncClient._copy_times', e.inner_exception)
 
+params = shell_utils.import_config()['__global__']
+params['LOSSLESS_PATH'] = shell_utils.realpath(params['LOSSLESS_PATH'])
+if not os.path.isdir(params['LOSSLESS_PATH']):
+    shell_utils.error("No lossless directory '{0}'".format(params['LOSSLESS_PATH']))
 
-LOSSLESS_PATH = shell_utils.realpath(LOSSLESS_PATH)
-if not os.path.isdir(LOSSLESS_PATH):
-    shell_utils.error("No lossless directory '{0}'".format(LOSSLESS_PATH))
+params['LOSSY_PATH'] = shell_utils.realpath(params['LOSSY_PATH'])
+if not os.path.isdir(params['LOSSY_PATH']):
+    shell_utils.error("No lossy directory '{0}'".format(params['LOSSY_PATH']))
 
-LOSSY_PATH = shell_utils.realpath(LOSSY_PATH)
-if not os.path.isdir(LOSSY_PATH):
-    shell_utils.error("No lossy directory '{0}'".format(LOSSY_PATH))
-
-encode_cmd = shlex.split(ENCODE_COMMAND)
+encode_cmd = shlex.split(params['ENCODE_COMMAND'])
 if len(encode_cmd) > 0:
     encode_cmd[0] = shell_utils.realpath(encode_cmd[0], True)
-MEDIAINFO_FILE_PATH = shell_utils.realpath(MEDIAINFO_FILE_PATH, True)
+params['EXTENSIONS'] = [ext.strip() if ext.find(',') == -1 else tuple(option.strip() for option in ext.split(',')) for ext in params['EXTENSIONS'].split('\n')]
+shell_utils.error(repr(params))
+params['MEDIAINFO_FILE_PATH'] = shell_utils.realpath(params['MEDIAINFO_FILE_PATH'], True)
+params['LOG_PATH'] = shell_utils.realpath(params['LOG_PATH'])
+if not os.path.isdir(params['LOG_PATH']):
+    os.mkdir(params['LOG_PATH'])
+log_file = os.path.join(params['LOG_PATH'], shell_utils.strftime('%Y-%m-%dT%H-%M-%S%z.log'))
+shell_utils.touch(log_file)
 
-LOG_PATH = shell_utils.realpath(LOG_PATH)
-log_file = os.path.join(LOG_PATH, shell_utils.strftime('%Y-%m-%dT%H-%M-%S%z.log'))
-if os.path.isdir(LOG_PATH):
-    shell_utils.touch(log_file)
-
-sync_client = SyncClient(LOSSLESS_PATH, LOSSY_PATH,
-                         EXTENSIONS, encode_cmd, MEDIAINFO_FILE_PATH,
+sync_client = SyncClient(params['LOSSLESS_PATH'], params['LOSSY_PATH'],
+                         params['EXTENSIONS'], encode_cmd, params['MEDIAINFO_FILE_PATH'],
                          logger=lambda message: shell_utils.log(log_file, message))
 sync_client.sync()
